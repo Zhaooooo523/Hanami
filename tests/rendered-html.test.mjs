@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { parseShortcutHash } from "../app/shortcut-entry.ts";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -41,4 +42,24 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(worker, /caches\.open/);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
+});
+
+test("parses iOS Shortcut hash without persisting it", async () => {
+  assert.deepEqual(
+    parseShortcutHash("#amount=1,280&merchant=%E5%85%A8%E8%81%AF&last4=1234&category=%E9%A4%90%E9%A3%B2&date=2026-08-03"),
+    { amount: 1280, merchant: "全聯", last4: "1234", category: "餐飲", date: "2026-08-03" },
+  );
+  assert.deepEqual(
+    parseShortcutHash("#?%E9%87%91%E9%A1%8D=99&%E5%95%86%E5%AE%B6=%E5%92%96%E5%95%A1"),
+    { amount: 99, merchant: "咖啡", last4: undefined, category: undefined, date: undefined },
+  );
+  assert.equal(parseShortcutHash("#section"), null);
+  assert.deepEqual(
+    parseShortcutHash("#amount=-1&last4=12&date=2026-02-30"),
+    { amount: undefined, merchant: undefined, last4: undefined, category: undefined, date: undefined },
+  );
+
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /history\.replaceState/);
+  assert.match(page, /確認並儲存/);
 });
