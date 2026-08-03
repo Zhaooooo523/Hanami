@@ -1,5 +1,6 @@
-const CACHE = "hanami-shell-v1";
-const SHELL = ["/"];
+const CACHE = "hanami-shell-v2";
+const APP_ROOT = new URL(self.registration.scope).pathname;
+const SHELL = [APP_ROOT];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
@@ -17,5 +18,5 @@ self.addEventListener("fetch", (event) => {
     const copy = response.clone();
     caches.open(CACHE).then((cache) => cache.put(event.request, copy));
     return response;
-  }).catch(() => caches.match(event.request).then((cached) => cached || caches.match("/"))));
+  }).catch(() => caches.match(event.request).then((cached) => cached || caches.match(APP_ROOT))));
 });

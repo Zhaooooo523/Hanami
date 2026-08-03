@@ -38,6 +38,7 @@ const themes: { id: Theme; name: string; description: string; colors: string[] }
 ];
 const DB_NAME = "spendlight-local";
 const DB_VERSION = 1;
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -142,7 +143,9 @@ export default function Home() {
         setTransactions(storedTransactions.sort((a, b) => b.date.localeCompare(a.date)));
       })
       .finally(() => setReady(true));
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register(`${BASE_PATH}/sw.js`, { scope: `${BASE_PATH}/` }).catch(() => undefined);
+    }
     const storedTheme = localStorage.getItem("hanami-theme") as Theme | null;
     if (storedTheme && themes.some((item) => item.id === storedTheme)) setTheme(storedTheme);
   }, []);

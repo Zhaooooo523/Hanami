@@ -49,19 +49,16 @@ npm run build
 
 ## 如何發布到 GitHub Pages
 
-這份專案目前使用 Vinext／Cloudflare Sites 的建置方式，不能只在 GitHub 設定中按一下就直接發布到 Pages。GitHub Pages 只能託管靜態 HTML、CSS 和 JavaScript，因此需要先加入：
+這份專案同時保留 Vinext／Cloudflare Sites 建置，並已加入 GitHub Pages 專用的靜態匯出與 GitHub Actions 工作流程。
 
-1. Next.js 靜態匯出設定。
-2. `/Hanami` 子路徑與 PWA 路徑調整。
-3. GitHub Actions 自動建置與發布流程。
-4. GitHub Pages 的 Actions 發布來源設定。
+每次更新推送到 `main` 後，GitHub 會自動建置並發布網站。
 
 完成程式調整並推送後，在 GitHub 操作：
 
 1. 開啟 repository 的 **Settings**。
 2. 在左側選擇 **Pages**。
 3. 將 **Build and deployment → Source** 設為 **GitHub Actions**。
-4. 等待 Actions 的 Pages 工作流程完成。
+4. 開啟 repository 的 **Actions**，等待 **Deploy GitHub Pages** 完成。
 5. 從 Pages 設定頁開啟網站。
 
 ### Repository 公開範圍
