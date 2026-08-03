@@ -83,7 +83,9 @@ button { cursor: pointer; }
 .hero-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, .75fr); gap: 18px; }
 .summary-card, .remaining-card { border-radius: 22px; border: 1px solid rgba(var(--primary-rgb),.14); box-shadow: 0 12px 36px rgba(var(--shadow-rgb),.08); }
 .summary-card { background: var(--green); color: white; padding: 30px 34px 26px; }
-.remaining-card { background: rgba(255,253,248,.75); padding: 30px; display: flex; flex-direction: column; justify-content: center; }
+.remaining-card { background: rgba(255,253,248,.75); padding: 30px; display: flex; flex-direction: column; justify-content: center; transition: border-color .2s ease, background .2s ease; }
+.remaining-card.warning { border-color: rgba(198,129,53,.38); background: linear-gradient(145deg, #fff9ef, rgba(255,253,248,.9)); }
+.remaining-card.critical { border-color: rgba(160,82,67,.42); background: linear-gradient(145deg, #fff4f0, rgba(255,250,247,.94)); }
 .eyebrow { display: block; text-transform: uppercase; letter-spacing: .14em; font-size: 11px; font-weight: 800; color: var(--muted); }
 .summary-card .eyebrow { color: #cddbd4; }
 .section-kicker-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
@@ -98,11 +100,21 @@ button { cursor: pointer; }
 .limit-track span { background: #d8a078; }
 .remaining-card > strong { font-family: Georgia, serif; font-size: clamp(32px, 4vw, 48px); margin: 12px 0 3px; letter-spacing: -.03em; }
 .remaining-card p { color: var(--muted); font-size: 13px; margin: 4px 0 18px; }
+.remaining-alert-banner { width: 100%; display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 9px; margin: 12px 0 2px; padding: 10px 11px; border: 1px solid rgba(198,129,53,.3); border-radius: 12px; background: #fff0d8; color: #8b561d; text-align: left; }
+.critical .remaining-alert-banner { border-color: rgba(160,82,67,.3); background: #ffe5de; color: #8c4336; }
+.remaining-alert-banner > span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: rgba(198,129,53,.14); font-size: 11px; font-weight: 900; }
+.critical .remaining-alert-banner > span { background: rgba(160,82,67,.13); }
+.remaining-alert-banner strong { font-size: 12px; }
+.remaining-alert-banner small { font-size: 10px; font-weight: 800; white-space: nowrap; }
 .remaining-breakdown { display: grid; gap: 7px; margin: 12px 0 18px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.remaining-breakdown > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+.remaining-breakdown > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 6px; border-radius: 8px; font-size: 12px; }
+.remaining-breakdown > div.warning { background: #fff0d8; color: #8b561d; }
+.remaining-breakdown > div.critical { background: #ffe5de; color: #8c4336; }
 .remaining-breakdown span { display: flex; align-items: center; min-width: 0; }
 .remaining-breakdown i { width: 7px; height: 7px; flex: 0 0 auto; margin-right: 7px; border-radius: 50%; }
 .remaining-breakdown strong { font-size: 12px; white-space: nowrap; }
+.remaining-breakdown em { margin-left: 6px; padding: 2px 5px; border-radius: 999px; background: rgba(198,129,53,.13); font-size: 9px; font-style: normal; font-weight: 800; white-space: nowrap; }
+.remaining-breakdown .critical em { background: rgba(160,82,67,.13); }
 .over-limit { color: #a05243 !important; }
 .text-button { border: 0; background: transparent; padding: 0; color: var(--green); align-self: flex-start; font-weight: 700; font-size: 13px; }
 .text-button span { margin-left: 7px; }
@@ -244,6 +256,8 @@ footer p { margin: 0; color: var(--green); font-weight: 700; }
   .wide { grid-column: auto; }
   .category-row { grid-template-columns: 8px 38px minmax(28px,1fr) auto; }
   .month-picker { max-width: 122px; }
+  .remaining-alert-banner { grid-template-columns: 32px 1fr; }
+  .remaining-alert-banner small { grid-column: 2; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }

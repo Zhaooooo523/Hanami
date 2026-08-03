@@ -192,6 +192,7 @@ export default function Home() {
   const activeAlerts = cardSummaries.filter(({ remaining, percent }) =>
     percent >= settings.usagePercent || remaining <= settings.remainingAmount,
   );
+  const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
     name,
     value: monthTransactions.filter((item) => item.category === name).reduce((sum, item) => sum + item.amount, 0),
@@ -304,18 +305,46 @@ export default function Home() {
   }
 
   function exportJson() {
-    const payload = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), cards, transactions, settings }, null, 2);
+    const cardLimitSummary = cardSummaries.map(({ card, spent, remaining: cardRemaining, percent }) => ({
+      cardId: card.id,
+      bank: card.bank,
+      name: card.name,
+      last4: card.last4,
+      limit: card.limit,
+      spent,
+      remaining: cardRemaining,
+      usagePercent: Number(percent.toFixed(2)),
+    }));
+    const payload = JSON.stringify({
+      version: 3,
+      exportedAt: new Date().toISOString(),
+      summaryMonth: month,
+      cardLimitSummary,
+      cards,
+      transactions,
+      settings,
+    }, null, 2);
     downloadFile(payload, `花見備份-${today()}.json`, "application/json");
-    flash("備份檔已建立，請存到「檔案」");
+    flash(`完整備份已建立，包含 ${cards.length} 張卡片額度`);
   }
 
   function exportCsv() {
-    const rows = [["日期", "商家", "分類", "金額", "信用卡", "備註"], ...transactions.map((item) => {
+    const transactionRows: (string | number)[][] = [["日期", "商家", "分類", "金額", "信用卡", "卡片額度", "備註"], ...transactions.map((item) => {
       const card = cards.find((candidate) => candidate.id === item.cardId);
-      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", item.note];
+      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", card?.limit ?? "", item.note];
     })];
+    const cardRows: (string | number)[][] = [
+      [],
+      ["信用卡資料"],
+      ["銀行", "卡片名稱", "末四碼", "信用額度", `${month} 已使用`, `${month} 剩餘額度`, "結帳日", "繳款截止日"],
+      ...cardSummaries.map(({ card, spent, remaining: cardRemaining }) => [
+        card.bank, card.name, card.last4, card.limit, spent, cardRemaining, card.closingDay, card.dueDay,
+      ]),
+    ];
+    const rows = [...transactionRows, ...cardRows];
     const csv = "\uFEFF" + rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
-    downloadFile(csv, `花見消費-${today()}.csv`, "text/csv;charset=utf-8");
+    downloadFile(csv, `花見消費與卡片-${today()}.csv`, "text/csv;charset=utf-8");
+    flash(`CSV 已匯出，包含 ${cards.length} 張卡片額度`);
   }
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
@@ -387,10 +416,22 @@ export default function Home() {
           <div className="limit-copy"><span>額度使用 {usage.toFixed(0)}%</span><span>總額度 {money(totalLimit)}</span></div>
         </div>
 
-        <div className="remaining-card">
+        <div className={`remaining-card${hasOverLimit ? " critical" : activeAlerts.length ? " warning" : ""}`}>
           <span className="eyebrow">目前剩餘額度</span>
           <strong>{money(remaining)}</strong>
-          {cards.length ? <div className="remaining-breakdown">{cardSummaries.map(({ card, remaining: cardRemaining }) => <div key={card.id}><span><i style={{ background: card.color }} />{card.name}</span><strong className={cardRemaining < 0 ? "over-limit" : ""}>{cardRemaining < 0 ? `超過 ${money(Math.abs(cardRemaining))}` : `剩餘 ${money(cardRemaining)}`}</strong></div>)}</div> : <p>先加入信用卡，即可開始追蹤</p>}
+          {activeAlerts.length > 0 && <button className="remaining-alert-banner" onClick={() => setModal("alerts")}>
+            <span>{hasOverLimit ? "!" : "低"}</span>
+            <strong>{hasOverLimit ? "已有卡片超過額度" : `${activeAlerts.length} 張卡片額度偏低`}</strong>
+            <small>查看提醒 →</small>
+          </button>}
+          {cards.length ? <div className="remaining-breakdown">{cardSummaries.map(({ card, remaining: cardRemaining, percent }) => {
+            const isOver = cardRemaining < 0;
+            const isWarning = !isOver && (cardRemaining <= settings.remainingAmount || percent >= settings.usagePercent);
+            return <div className={isOver ? "critical" : isWarning ? "warning" : ""} key={card.id}>
+              <span><i style={{ background: isOver ? "#a05243" : isWarning ? "#c68135" : card.color }} />{card.name}{(isOver || isWarning) && <em>{isOver ? "已超額" : "額度偏低"}</em>}</span>
+              <strong>{isOver ? `超過 ${money(Math.abs(cardRemaining))}` : `剩餘 ${money(cardRemaining)}`}</strong>
+            </div>;
+          })}</div> : <p>先加入信用卡，即可開始追蹤</p>}
           <button className="text-button" onClick={() => setModal("card")}>管理信用卡 <span>→</span></button>
         </div>
       </section>
@@ -454,7 +495,7 @@ export default function Home() {
           {modal === "card" && <CardManager cards={cards} editingCard={editingCard} onSubmit={saveCard} onEdit={editCard} onCancelEdit={() => setEditingCard(null)} onDelete={removeCard} />}
           {modal === "alerts" && <AlertSettings settings={settings} alerts={activeAlerts} onSubmit={saveAlertSettings} />}
           {modal === "paste" && <div><span className="eyebrow">通知轉記帳</span><h2>貼上消費通知</h2><p className="modal-intro">文字只會在這台裝置解析，不會被上傳。</p><textarea className="notice-area" value={noticeText} onChange={(e) => setNoticeText(e.target.value)} placeholder="例如：您的信用卡末四碼 1234 於全聯消費 NT$850…" autoFocus /><button className="submit-button" onClick={useNotification}>解析並確認</button></div>}
-          {modal === "backup" && <div><span className="eyebrow">資料安全</span><h2>備份與帶走資料</h2><p className="modal-intro">建議每月備份一次，並在 iPhone 下載後選擇「儲存到檔案」放入 iCloud Drive。</p><div className="backup-options"><button onClick={exportJson}><span>備</span><div><strong>建立完整備份</strong><small>可用來還原卡片與消費資料</small></div>→</button><button onClick={exportCsv}><span>表</span><div><strong>匯出 CSV 明細</strong><small>可用 Numbers 或 Excel 開啟</small></div>→</button><button onClick={() => fileRef.current?.click()}><span>還</span><div><strong>從備份檔還原</strong><small>將取代目前這台裝置的資料</small></div>→</button></div><input ref={fileRef} hidden type="file" accept="application/json,.json" onChange={importBackup} /></div>}
+          {modal === "backup" && <div><span className="eyebrow">資料安全</span><h2>備份與帶走資料</h2><p className="modal-intro">建議每月備份一次，並在 iPhone 下載後選擇「儲存到檔案」放入 iCloud Drive。</p><div className="backup-options"><button onClick={exportJson}><span>備</span><div><strong>建立完整備份</strong><small>包含卡片額度、結帳日、消費與提醒設定，可完整還原</small></div>→</button><button onClick={exportCsv}><span>表</span><div><strong>匯出 CSV 資料</strong><small>包含消費明細與每張卡片的額度資料</small></div>→</button><button onClick={() => fileRef.current?.click()}><span>還</span><div><strong>從備份檔還原</strong><small>將取代目前這台裝置的資料</small></div>→</button></div><input ref={fileRef} hidden type="file" accept="application/json,.json" onChange={importBackup} /></div>}
         </section>
       </div>}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
