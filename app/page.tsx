@@ -178,9 +178,10 @@ export default function Home() {
       const shortcut = parseShortcutHash(window.location.hash);
       if (!shortcut) return;
 
-      const matchedCard = shortcut.last4
-        ? cards.find((card) => card.last4 === shortcut.last4)
-        : undefined;
+      const matchedCards = shortcut.last4
+        ? cards.filter((card) => card.last4 === shortcut.last4)
+        : [];
+      const matchedCard = matchedCards.length === 1 ? matchedCards[0] : undefined;
       const category = shortcut.category
         ? categories.includes(shortcut.category) ? shortcut.category : ""
         : undefined;
@@ -193,12 +194,42 @@ export default function Home() {
         category,
         date: shortcut.date,
       });
-      setModal("expense");
 
       // Hash 只作為一次性傳遞資料；解析後立即從網址列與瀏覽紀錄清除。
       window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
 
-      if (shortcut.last4 && !matchedCard) setToast(`找不到末四碼 ${shortcut.last4} 的卡片，請手動選擇`);
+      const canAutoSave = shortcut.autoSave
+        && shortcut.amount
+        && shortcut.merchant
+        && shortcut.date
+        && matchedCard
+        && category;
+
+      if (canAutoSave) {
+        const transaction: Transaction = {
+          id: uid(),
+          cardId: matchedCard.id,
+          amount: shortcut.amount!,
+          merchant: shortcut.merchant!,
+          category,
+          date: shortcut.date!,
+          note: "",
+          createdAt: new Date().toISOString(),
+        };
+        putItem("transactions", transaction).then(() => {
+          setTransactions((items) => [transaction, ...items].sort((a, b) => b.date.localeCompare(a.date)));
+          setModal(null);
+          setToast(`已自動新增 ${transaction.merchant} ${money(transaction.amount)}`);
+        }).catch(() => {
+          setModal("expense");
+          setToast("自動儲存失敗，請確認後手動儲存");
+        });
+        return;
+      }
+
+      setModal("expense");
+      if (shortcut.autoSave) setToast("資料不完整或無法唯一匹配卡片，請確認後手動儲存");
+      else if (shortcut.last4 && !matchedCard) setToast(`找不到末四碼 ${shortcut.last4} 的卡片，請手動選擇`);
       else if (shortcut.category && !category) setToast(`「${shortcut.category}」不是有效分類，請手動選擇`);
     };
 

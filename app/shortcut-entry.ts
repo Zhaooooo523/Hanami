@@ -4,6 +4,7 @@ export type ShortcutEntry = {
   last4?: string;
   category?: string;
   date?: string;
+  autoSave: boolean;
 };
 
 const parameterNames = {
@@ -12,6 +13,7 @@ const parameterNames = {
   last4: ["last4", "card", "卡片末四碼"],
   category: ["category", "分類"],
   date: ["date", "日期"],
+  autoSave: ["save", "autoSave", "自動儲存"],
 } as const;
 
 function firstValue(params: URLSearchParams, names: readonly string[]) {
@@ -37,8 +39,8 @@ export function parseShortcutHash(hash: string): ShortcutEntry | null {
   if (!raw) return null;
 
   const params = new URLSearchParams(raw);
-  const hasShortcutParameter = Object.values(parameterNames)
-    .some((names) => names.some((name) => params.has(name)));
+  const hasShortcutParameter = Object.entries(parameterNames)
+    .some(([key, names]) => key !== "autoSave" && names.some((name) => params.has(name)));
   if (!hasShortcutParameter) return null;
 
   const amountText = firstValue(params, parameterNames.amount)?.replaceAll(",", "");
@@ -47,6 +49,7 @@ export function parseShortcutHash(hash: string): ShortcutEntry | null {
   const last4Text = firstValue(params, parameterNames.last4);
   const category = firstValue(params, parameterNames.category);
   const dateText = firstValue(params, parameterNames.date);
+  const autoSaveText = firstValue(params, parameterNames.autoSave)?.toLowerCase();
 
   return {
     amount: amount && Number.isFinite(amount) && amount > 0 ? amount : undefined,
@@ -54,5 +57,6 @@ export function parseShortcutHash(hash: string): ShortcutEntry | null {
     last4: last4Text && /^\d{4}$/.test(last4Text) ? last4Text : undefined,
     category: category || undefined,
     date: dateText && isValidDate(dateText) ? dateText : undefined,
+    autoSave: ["1", "true", "yes", "是"].includes(autoSaveText ?? ""),
   };
 }
