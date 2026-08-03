@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { parseShortcutHash } from "./shortcut-entry";
 
 type Card = {
   id: string;
@@ -35,6 +36,7 @@ type AppSettings = {
 };
 type AppData = { cards: Card[]; transactions: Transaction[]; settings?: AppSettings };
 type Modal = "expense" | "card" | "paste" | "backup" | "alerts" | null;
+type ExpenseSeed = Partial<Transaction>;
 
 const categories = ["餐飲", "交通", "購物", "生活", "娛樂", "醫療", "其他"];
 const cardColors = ["#557da6", "#78a9c7", "#657aac", "#879fc1", "#4f8a9d"];
@@ -143,7 +145,7 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [month, setMonth] = useState(today().slice(0, 7));
   const [noticeText, setNoticeText] = useState("");
-  const [expenseSeed, setExpenseSeed] = useState<Partial<Transaction>>({});
+  const [expenseSeed, setExpenseSeed] = useState<ExpenseSeed>({});
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
@@ -168,6 +170,42 @@ export default function Home() {
     document.documentElement.dataset.theme = theme;
     if (ready) putItem("settings", settings).catch(() => undefined);
   }, [ready, settings, theme]);
+
+  useEffect(() => {
+    if (!ready) return;
+
+    const openShortcutEntry = () => {
+      const shortcut = parseShortcutHash(window.location.hash);
+      if (!shortcut) return;
+
+      const matchedCard = shortcut.last4
+        ? cards.find((card) => card.last4 === shortcut.last4)
+        : undefined;
+      const category = shortcut.category
+        ? categories.includes(shortcut.category) ? shortcut.category : ""
+        : undefined;
+
+      setEditingTransaction(null);
+      setExpenseSeed({
+        amount: shortcut.amount,
+        merchant: shortcut.merchant,
+        cardId: shortcut.last4 ? matchedCard?.id ?? "" : undefined,
+        category,
+        date: shortcut.date,
+      });
+      setModal("expense");
+
+      // Hash 只作為一次性傳遞資料；解析後立即從網址列與瀏覽紀錄清除。
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
+
+      if (shortcut.last4 && !matchedCard) setToast(`找不到末四碼 ${shortcut.last4} 的卡片，請手動選擇`);
+      else if (shortcut.category && !category) setToast(`「${shortcut.category}」不是有效分類，請手動選擇`);
+    };
+
+    openShortcutEntry();
+    window.addEventListener("hashchange", openShortcutEntry);
+    return () => window.removeEventListener("hashchange", openShortcutEntry);
+  }, [cards, ready]);
 
   useEffect(() => {
     if (!toast) return;
@@ -503,8 +541,8 @@ export default function Home() {
   );
 }
 
-function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: Partial<Transaction>; editing: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="0" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId || cards[0]?.id} required>{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category || "餐飲"}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="分期、共同支出等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "儲存這筆消費"}</button></form>;
+function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: ExpenseSeed; editing: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="0" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="分期、共同支出等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
 }
 
 function CardManager({ cards, editingCard, onSubmit, onEdit, onCancelEdit, onDelete }: { cards: Card[]; editingCard: Card | null; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onEdit: (card: Card) => void; onCancelEdit: () => void; onDelete: (id: string) => void }) {
