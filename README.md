@@ -47,14 +47,6 @@ npm run dev
 npm run build
 ```
 
-## GitHub 上的「原始碼」與「網站」有什麼不同？
-
-目前 GitHub repository 已保存花見的原始碼，但這不代表 GitHub Pages 網站已經啟用。
-
-- 原始碼 repository：`https://github.com/Zhaooooo523/Hanami`
-- GitHub Pages 預計網址：`https://zhaooooo523.github.io/Hanami/`
-- 目前已發布網站：`https://hanami-card-ledger.sarah920523.chatgpt.site`
-
 ## 如何發布到 GitHub Pages
 
 這份專案目前使用 Vinext／Cloudflare Sites 的建置方式，不能只在 GitHub 設定中按一下就直接發布到 Pages。GitHub Pages 只能託管靜態 HTML、CSS 和 JavaScript，因此需要先加入：
