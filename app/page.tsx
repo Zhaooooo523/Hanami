@@ -38,7 +38,7 @@ type AppSettings = {
   theme: Theme;
 };
 type AppData = { cards: Card[]; transactions: Transaction[]; settings?: AppSettings };
-type Modal = "expense" | "expenseDetail" | "card" | "paste" | "backup" | "alerts" | null;
+type Modal = "expense" | "expenseDetail" | "categoryDetail" | "card" | "paste" | "backup" | "alerts" | null;
 type ExpenseSeed = Partial<Transaction>;
 
 const categories = ["餐飲", "交通", "購物", "生活", "娛樂", "醫療", "其他"];
@@ -170,6 +170,7 @@ export default function Home() {
   const [expenseSeed, setExpenseSeed] = useState<ExpenseSeed>({});
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [themeOpen, setThemeOpen] = useState(false);
@@ -580,9 +581,9 @@ export default function Home() {
         <div className="panel category-panel">
           <div className="panel-heading"><div><span className="eyebrow">花費分布</span><h2>本月分類</h2></div></div>
           {byCategory.length === 0 ? <div className="empty-chart"><span>○</span><p>有消費後，就能看見分類占比</p></div> : (
-            <div className="category-list">{byCategory.slice(0, 5).map((item, index) => <div className="category-row" key={item.name}>
+            <div className="category-list">{byCategory.slice(0, 5).map((item, index) => <button type="button" className="category-row" key={item.name} onClick={() => { setSelectedCategory(item.name); setModal("categoryDetail"); }} aria-label={`查看${item.name}的 ${monthTransactions.filter((transaction) => transaction.category === item.name).length} 筆消費`}>
               <span className={`category-dot dot-${index}`} /><strong>{item.name}</strong><div className="category-bar"><i style={{ width: `${(item.value / totalSpent) * 100}%` }} /></div><span>{money(item.value)}</span>
-            </div>)}</div>
+            </button>)}</div>
           )}
         </div>
       </section>
@@ -622,11 +623,12 @@ export default function Home() {
 
       <footer><p>花見不會上傳你的消費資料</p><span>資料保存在此瀏覽器 · 請定期備份</span></footer>
 
-      {modal && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); } }}>
+      {modal && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); setSelectedCategory(null); } }}>
         <section className="modal" role="dialog" aria-modal="true">
-          <button className="modal-close" onClick={() => { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); }} aria-label="關閉">×</button>
+          <button className="modal-close" onClick={() => { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); setSelectedCategory(null); }} aria-label="關閉">×</button>
           {modal === "expense" && <ExpenseForm cards={cards} seed={expenseSeed} editing={Boolean(editingTransaction)} onSubmit={saveExpense} />}
           {modal === "expenseDetail" && selectedTransaction && <ExpenseDetail transaction={selectedTransaction} card={cards.find((card) => card.id === selectedTransaction.cardId)} onEdit={() => editExpense(selectedTransaction)} />}
+          {modal === "categoryDetail" && selectedCategory && <CategoryDetail category={selectedCategory} month={month} transactions={monthTransactions.filter((transaction) => transaction.category === selectedCategory)} cards={cards} onSelect={(transaction) => { setSelectedTransaction(transaction); setSelectedCategory(null); setModal("expenseDetail"); }} />}
           {modal === "card" && <CardManager cards={cards} editingCard={editingCard} onSubmit={saveCard} onEdit={editCard} onCancelEdit={() => setEditingCard(null)} onDelete={removeCard} />}
           {modal === "alerts" && <AlertSettings settings={settings} alerts={activeAlerts} onSubmit={saveAlertSettings} />}
           {modal === "paste" && <div><span className="eyebrow">通知轉記帳</span><h2>貼上消費通知</h2><p className="modal-intro">文字只會在這台裝置解析，不會被上傳。</p><textarea className="notice-area" value={noticeText} onChange={(e) => setNoticeText(e.target.value)} placeholder="例如：您的信用卡末四碼 1234 於全聯消費 NT$850…" autoFocus /><button className="submit-button" onClick={useNotification}>解析並確認</button></div>}
@@ -659,6 +661,23 @@ function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction
       <div><dt>備註</dt><dd>{transaction.note || "沒有備註"}</dd></div>
     </dl>
     <button className="submit-button" type="button" onClick={onEdit}>編輯這筆花費</button>
+  </div>;
+}
+
+function CategoryDetail({ category, month, transactions, cards, onSelect }: { category: string; month: string; transactions: Transaction[]; cards: Card[]; onSelect: (transaction: Transaction) => void }) {
+  const total = transactions.reduce((sum, transaction) => sum + transaction.amount, 0);
+  return <div className="category-detail">
+    <span className="eyebrow">{month.replace("-", " 年 ")} 月分類明細</span>
+    <div className="category-detail-heading"><div><h2>{category}</h2><p>{transactions.length} 筆消費</p></div><strong>{money(total)}</strong></div>
+    {transactions.length === 0 ? <p className="category-detail-empty">這個月份沒有此分類的消費。</p> : <div className="category-detail-list">{transactions.map((transaction) => {
+      const card = cards.find((candidate) => candidate.id === transaction.cardId);
+      return <button type="button" key={transaction.id} onClick={() => onSelect(transaction)} aria-label={`查看 ${transaction.merchant} ${money(transaction.amount)} 詳情`}>
+        <span className="category-detail-date">{transaction.date.slice(8, 10)}<small>日</small></span>
+        <span className="category-detail-main"><strong>{transaction.merchant || "未命名消費"}</strong><small>{card?.name ?? "卡片資料已移除"} · {normalizedPaymentMethod(transaction.paymentMethod)}{normalizedInstallmentCount(transaction.installmentCount) > 1 ? ` · ${normalizedInstallmentCount(transaction.installmentCount)} 期` : ""}</small></span>
+        <strong className="category-detail-amount">{money(transaction.amount)}</strong>
+        <span className="category-detail-arrow" aria-hidden="true">›</span>
+      </button>;
+    })}</div>}
   </div>;
 }
 
