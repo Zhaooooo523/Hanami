@@ -23,10 +23,13 @@ type Transaction = {
   category: string;
   date: string;
   note: string;
+  paymentMethod: PaymentMethod;
+  installmentCount: number;
   createdAt: string;
 };
 
 type Theme = "mist" | "sky" | "lavender";
+type PaymentMethod = "實體卡／直接刷卡" | "Apple Pay" | "LINE Pay";
 type AppSettings = {
   id: "preferences";
   usagePercent: number;
@@ -39,6 +42,8 @@ type Modal = "expense" | "expenseDetail" | "card" | "paste" | "backup" | "alerts
 type ExpenseSeed = Partial<Transaction>;
 
 const categories = ["餐飲", "交通", "購物", "生活", "娛樂", "醫療", "其他"];
+const paymentMethods: PaymentMethod[] = ["實體卡／直接刷卡", "Apple Pay", "LINE Pay"];
+const installmentOptions = [1, 3, 6, 12, 18, 24, 30];
 const cardColors = ["#557da6", "#78a9c7", "#657aac", "#879fc1", "#4f8a9d"];
 const themes: { id: Theme; name: string; description: string; colors: string[] }[] = [
   { id: "mist", name: "霧藍", description: "安靜柔和", colors: ["#557da6", "#dfeaf5", "#f1f6fb"] },
@@ -122,6 +127,21 @@ const money = (value: number) => new Intl.NumberFormat("zh-TW", {
 
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+const normalizedPaymentMethod = (value?: string): PaymentMethod => paymentMethods.includes(value as PaymentMethod)
+  ? value as PaymentMethod
+  : paymentMethods[0];
+const normalizedInstallmentCount = (value?: number) => Number.isInteger(value) && (value ?? 0) > 1 && (value ?? 0) <= 60
+  ? value!
+  : 1;
+const installmentLabel = (transaction: Transaction) => {
+  const count = normalizedInstallmentCount(transaction.installmentCount);
+  return count > 1 ? `${count} 期 · 每期約 ${money(Math.ceil(transaction.amount / count))}` : "一次付清";
+};
+const normalizeTransaction = (transaction: Transaction): Transaction => ({
+  ...transaction,
+  paymentMethod: normalizedPaymentMethod(transaction.paymentMethod),
+  installmentCount: normalizedInstallmentCount(transaction.installmentCount),
+});
 
 function parseNotification(text: string, cards: Card[]) {
   const amountMatches = [...text.matchAll(/(?:NT\$|TWD|新臺幣|新台幣|金額|消費)\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/gi)];
@@ -145,6 +165,7 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [month, setMonth] = useState(today().slice(0, 7));
   const [cardFilter, setCardFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
   const [noticeText, setNoticeText] = useState("");
   const [expenseSeed, setExpenseSeed] = useState<ExpenseSeed>({});
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -159,7 +180,7 @@ export default function Home() {
     Promise.all([getAll<Card>("cards"), getAll<Transaction>("transactions"), getAll<AppSettings>("settings")])
       .then(([storedCards, storedTransactions, storedSettings]) => {
         setCards(storedCards);
-        setTransactions(storedTransactions.sort((a, b) => b.date.localeCompare(a.date)));
+        setTransactions(storedTransactions.map(normalizeTransaction).sort((a, b) => b.date.localeCompare(a.date)));
         if (storedSettings[0]) setSettings({ ...defaultSettings, ...storedSettings[0] });
       })
       .finally(() => setReady(true));
@@ -187,6 +208,9 @@ export default function Home() {
       const category = shortcut.category
         ? categories.includes(shortcut.category) ? shortcut.category : ""
         : undefined;
+      const paymentMethod = shortcut.paymentMethod
+        ? normalizedPaymentMethod(shortcut.paymentMethod)
+        : undefined;
 
       setEditingTransaction(null);
       setExpenseSeed({
@@ -195,6 +219,8 @@ export default function Home() {
         cardId: shortcut.last4 ? matchedCard?.id ?? "" : undefined,
         category,
         date: shortcut.date,
+        paymentMethod,
+        installmentCount: shortcut.installmentCount,
       });
 
       // Hash 只作為一次性傳遞資料；解析後立即從網址列與瀏覽紀錄清除。
@@ -216,6 +242,8 @@ export default function Home() {
           category,
           date: shortcut.date!,
           note: "",
+          paymentMethod: paymentMethod ?? paymentMethods[0],
+          installmentCount: normalizedInstallmentCount(shortcut.installmentCount),
           createdAt: new Date().toISOString(),
         };
         putItem("transactions", transaction).then(() => {
@@ -263,12 +291,10 @@ export default function Home() {
   const activeAlerts = cardSummaries.filter(({ remaining, percent }) =>
     percent >= settings.usagePercent || remaining <= settings.remainingAmount,
   );
-  const visibleTransactions = useMemo(
-    () => cardFilter === "all"
-      ? monthTransactions
-      : monthTransactions.filter((item) => item.cardId === cardFilter),
-    [cardFilter, monthTransactions],
-  );
+  const visibleTransactions = useMemo(() => monthTransactions.filter((item) =>
+    (cardFilter === "all" || item.cardId === cardFilter)
+    && (paymentFilter === "all" || normalizedPaymentMethod(item.paymentMethod) === paymentFilter),
+  ), [cardFilter, paymentFilter, monthTransactions]);
   const visibleTotal = visibleTransactions.reduce((sum, item) => sum + item.amount, 0);
   const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
@@ -298,7 +324,10 @@ export default function Home() {
     const transaction: Transaction = {
       id: editingTransaction?.id ?? uid(), cardId: String(form.get("cardId")), amount: Number(form.get("amount")),
       merchant: String(form.get("merchant") ?? "").trim(), category: String(form.get("category")),
-      date: String(form.get("date")), note: String(form.get("note") ?? "").trim(), createdAt: editingTransaction?.createdAt ?? new Date().toISOString(),
+      date: String(form.get("date")), note: String(form.get("note") ?? "").trim(),
+      paymentMethod: normalizedPaymentMethod(String(form.get("paymentMethod") ?? "")),
+      installmentCount: normalizedInstallmentCount(Number(form.get("installmentCount"))),
+      createdAt: editingTransaction?.createdAt ?? new Date().toISOString(),
     };
     await putItem("transactions", transaction);
     const nextTransactions = editingTransaction
@@ -402,7 +431,7 @@ export default function Home() {
       usagePercent: Number(percent.toFixed(2)),
     }));
     const payload = JSON.stringify({
-      version: 3,
+      version: 4,
       exportedAt: new Date().toISOString(),
       summaryMonth: month,
       cardLimitSummary,
@@ -415,9 +444,10 @@ export default function Home() {
   }
 
   function exportCsv() {
-    const transactionRows: (string | number)[][] = [["日期", "商家", "分類", "金額", "信用卡", "卡片額度", "備註"], ...transactions.map((item) => {
+    const transactionRows: (string | number)[][] = [["日期", "商家", "分類", "金額", "信用卡", "付款管道", "分期期數", "每期約", "卡片額度", "備註"], ...transactions.map((item) => {
       const card = cards.find((candidate) => candidate.id === item.cardId);
-      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", card?.limit ?? "", item.note];
+      const count = normalizedInstallmentCount(item.installmentCount);
+      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", normalizedPaymentMethod(item.paymentMethod), count, Math.ceil(item.amount / count), card?.limit ?? "", item.note];
     })];
     const cardRows: (string | number)[][] = [
       [],
@@ -440,8 +470,9 @@ export default function Home() {
       const raw = JSON.parse(await file.text());
       if (!Array.isArray(raw.cards) || !Array.isArray(raw.transactions)) throw new Error("invalid");
       const restoredSettings = raw.settings ? { ...defaultSettings, ...raw.settings } : settings;
-      await replaceAll({ cards: raw.cards, transactions: raw.transactions, settings: restoredSettings });
-      setCards(raw.cards); setTransactions(raw.transactions.sort((a: Transaction, b: Transaction) => b.date.localeCompare(a.date)));
+      const restoredTransactions = raw.transactions.map((item: Transaction) => normalizeTransaction(item));
+      await replaceAll({ cards: raw.cards, transactions: restoredTransactions, settings: restoredSettings });
+      setCards(raw.cards); setTransactions(restoredTransactions.sort((a: Transaction, b: Transaction) => b.date.localeCompare(a.date)));
       setSettings(restoredSettings);
       setModal(null); flash("備份已成功還原");
     } catch { flash("這不是有效的花見備份檔"); }
@@ -566,6 +597,12 @@ export default function Home() {
                 {cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}
               </select>
             </label>
+            <label className="card-filter">付款管道
+              <select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} aria-label="篩選付款管道">
+                <option value="all">全部付款管道</option>
+                {paymentMethods.map((method) => <option key={method}>{method}</option>)}
+              </select>
+            </label>
             <span className="record-count">{visibleTransactions.length} 筆 · {money(visibleTotal)}</span>
           </div>
         </div>
@@ -574,7 +611,7 @@ export default function Home() {
             const card = cards.find((candidate) => candidate.id === item.cardId);
             return <article className="transaction-row" key={item.id} role="button" tabIndex={0} onClick={() => viewExpense(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(item); } }} aria-label={`查看 ${item.merchant || "未命名消費"} 詳情`}>
               <div className="category-icon">{item.category.slice(0, 1)}</div>
-              <div className="transaction-main"><strong>{item.merchant || "未命名消費"}</strong><span>{item.date} · {item.category}{card ? ` · ${card.name}` : ""}</span></div>
+              <div className="transaction-main"><strong>{item.merchant || "未命名消費"}</strong><span>{item.date} · {item.category}{card ? ` · ${card.name}` : ""} · {normalizedPaymentMethod(item.paymentMethod)}{normalizedInstallmentCount(item.installmentCount) > 1 ? ` · ${normalizedInstallmentCount(item.installmentCount)} 期` : ""}</span></div>
               <strong className="transaction-amount">− {money(item.amount)}</strong>
               <span className="transaction-view" aria-hidden="true">查看 →</span>
               <button className="delete-button" onClick={(event) => { event.stopPropagation(); removeTransaction(item.id); }} aria-label={`刪除 ${item.merchant} 消費`}>×</button>
@@ -602,7 +639,8 @@ export default function Home() {
 }
 
 function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: ExpenseSeed; editing: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="0" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="分期、共同支出等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
+  const selectedInstallmentCount = normalizedInstallmentCount(seed.installmentCount);
+  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="刷卡總額" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>付款管道<select name="paymentMethod" defaultValue={normalizedPaymentMethod(seed.paymentMethod)} required>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label>分期付款<select name="installmentCount" defaultValue={selectedInstallmentCount} required>{!installmentOptions.includes(selectedInstallmentCount) && <option value={selectedInstallmentCount}>{selectedInstallmentCount} 期</option>}{installmentOptions.map((count) => <option key={count} value={count}>{count === 1 ? "一次付清" : `${count} 期`}</option>)}</select></label><p className="form-help wide">金額請填刷卡總額；分期不會重複計入額度。</p><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="共同支出、報帳等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
 }
 
 function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction; card?: Card; onEdit: () => void }) {
@@ -616,6 +654,8 @@ function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction
       <div><dt>消費日期</dt><dd>{transaction.date}</dd></div>
       <div><dt>信用卡</dt><dd>{card ? `${card.name} · •••• ${card.last4 || "未填"}` : "卡片資料已移除"}</dd></div>
       <div><dt>分類</dt><dd>{transaction.category}</dd></div>
+      <div><dt>付款管道</dt><dd>{normalizedPaymentMethod(transaction.paymentMethod)}</dd></div>
+      <div><dt>付款方式</dt><dd>{installmentLabel(transaction)}</dd></div>
       <div><dt>備註</dt><dd>{transaction.note || "沒有備註"}</dd></div>
     </dl>
     <button className="submit-button" type="button" onClick={onEdit}>編輯這筆花費</button>

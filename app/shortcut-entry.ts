@@ -4,6 +4,8 @@ export type ShortcutEntry = {
   last4?: string;
   category?: string;
   date?: string;
+  paymentMethod?: string;
+  installmentCount?: number;
   autoSave: boolean;
 };
 
@@ -13,6 +15,8 @@ const parameterNames = {
   last4: ["last4", "card", "卡片末四碼"],
   category: ["category", "分類"],
   date: ["date", "日期"],
+  paymentMethod: ["paymentMethod", "payment", "付款管道"],
+  installmentCount: ["installmentCount", "installments", "分期期數"],
   autoSave: ["save", "autoSave", "自動儲存"],
 } as const;
 
@@ -49,6 +53,9 @@ export function parseShortcutHash(hash: string): ShortcutEntry | null {
   const last4Text = firstValue(params, parameterNames.last4);
   const category = firstValue(params, parameterNames.category);
   const dateText = firstValue(params, parameterNames.date);
+  const paymentMethod = firstValue(params, parameterNames.paymentMethod);
+  const installmentText = firstValue(params, parameterNames.installmentCount);
+  const installmentCount = installmentText ? Number(installmentText) : undefined;
   const autoSaveText = firstValue(params, parameterNames.autoSave)?.toLowerCase();
 
   return {
@@ -57,6 +64,10 @@ export function parseShortcutHash(hash: string): ShortcutEntry | null {
     last4: last4Text && /^\d{4}$/.test(last4Text) ? last4Text : undefined,
     category: category || undefined,
     date: dateText && isValidDate(dateText) ? dateText : undefined,
+    paymentMethod: paymentMethod || undefined,
+    installmentCount: installmentCount && Number.isInteger(installmentCount) && installmentCount > 1 && installmentCount <= 60
+      ? installmentCount
+      : undefined,
     autoSave: ["1", "true", "yes", "是"].includes(autoSaveText ?? ""),
   };
 }
