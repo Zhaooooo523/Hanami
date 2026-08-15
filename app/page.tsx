@@ -35,7 +35,7 @@ type AppSettings = {
   theme: Theme;
 };
 type AppData = { cards: Card[]; transactions: Transaction[]; settings?: AppSettings };
-type Modal = "expense" | "card" | "paste" | "backup" | "alerts" | null;
+type Modal = "expense" | "expenseDetail" | "card" | "paste" | "backup" | "alerts" | null;
 type ExpenseSeed = Partial<Transaction>;
 
 const categories = ["餐飲", "交通", "購物", "生活", "娛樂", "醫療", "其他"];
@@ -144,9 +144,11 @@ export default function Home() {
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState("");
   const [month, setMonth] = useState(today().slice(0, 7));
+  const [cardFilter, setCardFilter] = useState("all");
   const [noticeText, setNoticeText] = useState("");
   const [expenseSeed, setExpenseSeed] = useState<ExpenseSeed>({});
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [themeOpen, setThemeOpen] = useState(false);
@@ -261,6 +263,13 @@ export default function Home() {
   const activeAlerts = cardSummaries.filter(({ remaining, percent }) =>
     percent >= settings.usagePercent || remaining <= settings.remainingAmount,
   );
+  const visibleTransactions = useMemo(
+    () => cardFilter === "all"
+      ? monthTransactions
+      : monthTransactions.filter((item) => item.cardId === cardFilter),
+    [cardFilter, monthTransactions],
+  );
+  const visibleTotal = visibleTransactions.reduce((sum, item) => sum + item.amount, 0);
   const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
     name,
@@ -302,7 +311,11 @@ export default function Home() {
   }
 
   function editExpense(transaction: Transaction) {
-    setEditingTransaction(transaction); setExpenseSeed(transaction); setModal("expense");
+    setSelectedTransaction(null); setEditingTransaction(transaction); setExpenseSeed(transaction); setModal("expense");
+  }
+
+  function viewExpense(transaction: Transaction) {
+    setSelectedTransaction(transaction); setModal("expenseDetail");
   }
 
   function editCard(card: Card) {
@@ -312,6 +325,10 @@ export default function Home() {
   async function removeTransaction(id: string) {
     await deleteItem("transactions", id);
     setTransactions((items) => items.filter((item) => item.id !== id));
+    if (selectedTransaction?.id === id) {
+      setSelectedTransaction(null);
+      setModal(null);
+    }
     flash("紀錄已刪除");
   }
 
@@ -540,16 +557,27 @@ export default function Home() {
       </section>
 
       <section className="transactions-section">
-        <div className="panel-heading"><div><span className="eyebrow">近期明細</span><h2>{month.replace("-", " 年 ")} 月</h2></div><span className="record-count">{monthTransactions.length} 筆</span></div>
-        {monthTransactions.length === 0 ? <div className="empty-transactions"><span>收</span><strong>這個月還沒有消費紀錄</strong><p>從手動新增或貼上銀行通知開始。</p></div> : (
-          <div className="transaction-list">{monthTransactions.map((item) => {
+        <div className="panel-heading transactions-heading">
+          <div><span className="eyebrow">近期明細</span><h2>{month.replace("-", " 年 ")} 月</h2></div>
+          <div className="transaction-tools">
+            <label className="card-filter">信用卡
+              <select value={cardFilter} onChange={(event) => setCardFilter(event.target.value)} aria-label="篩選信用卡">
+                <option value="all">全部信用卡</option>
+                {cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}
+              </select>
+            </label>
+            <span className="record-count">{visibleTransactions.length} 筆 · {money(visibleTotal)}</span>
+          </div>
+        </div>
+        {visibleTransactions.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthTransactions.length ? "這張卡本月沒有消費" : "這個月還沒有消費紀錄"}</strong><p>{monthTransactions.length ? "可以切換其他信用卡或查看全部紀錄。" : "從手動新增或貼上銀行通知開始。"}</p></div> : (
+          <div className="transaction-list">{visibleTransactions.map((item) => {
             const card = cards.find((candidate) => candidate.id === item.cardId);
-            return <article className="transaction-row" key={item.id}>
+            return <article className="transaction-row" key={item.id} role="button" tabIndex={0} onClick={() => viewExpense(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(item); } }} aria-label={`查看 ${item.merchant || "未命名消費"} 詳情`}>
               <div className="category-icon">{item.category.slice(0, 1)}</div>
               <div className="transaction-main"><strong>{item.merchant || "未命名消費"}</strong><span>{item.date} · {item.category}{card ? ` · ${card.name}` : ""}</span></div>
               <strong className="transaction-amount">− {money(item.amount)}</strong>
-              <button className="row-edit-button transaction-edit" onClick={() => editExpense(item)} aria-label={`編輯 ${item.merchant} 消費`}>編輯</button>
-              <button className="delete-button" onClick={() => removeTransaction(item.id)} aria-label={`刪除 ${item.merchant} 消費`}>×</button>
+              <span className="transaction-view" aria-hidden="true">查看 →</span>
+              <button className="delete-button" onClick={(event) => { event.stopPropagation(); removeTransaction(item.id); }} aria-label={`刪除 ${item.merchant} 消費`}>×</button>
             </article>;
           })}</div>
         )}
@@ -557,10 +585,11 @@ export default function Home() {
 
       <footer><p>花見不會上傳你的消費資料</p><span>資料保存在此瀏覽器 · 請定期備份</span></footer>
 
-      {modal && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditingCard(null); setEditingTransaction(null); } }}>
+      {modal && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); } }}>
         <section className="modal" role="dialog" aria-modal="true">
-          <button className="modal-close" onClick={() => { setModal(null); setEditingCard(null); setEditingTransaction(null); }} aria-label="關閉">×</button>
+          <button className="modal-close" onClick={() => { setModal(null); setEditingCard(null); setEditingTransaction(null); setSelectedTransaction(null); }} aria-label="關閉">×</button>
           {modal === "expense" && <ExpenseForm cards={cards} seed={expenseSeed} editing={Boolean(editingTransaction)} onSubmit={saveExpense} />}
+          {modal === "expenseDetail" && selectedTransaction && <ExpenseDetail transaction={selectedTransaction} card={cards.find((card) => card.id === selectedTransaction.cardId)} onEdit={() => editExpense(selectedTransaction)} />}
           {modal === "card" && <CardManager cards={cards} editingCard={editingCard} onSubmit={saveCard} onEdit={editCard} onCancelEdit={() => setEditingCard(null)} onDelete={removeCard} />}
           {modal === "alerts" && <AlertSettings settings={settings} alerts={activeAlerts} onSubmit={saveAlertSettings} />}
           {modal === "paste" && <div><span className="eyebrow">通知轉記帳</span><h2>貼上消費通知</h2><p className="modal-intro">文字只會在這台裝置解析，不會被上傳。</p><textarea className="notice-area" value={noticeText} onChange={(e) => setNoticeText(e.target.value)} placeholder="例如：您的信用卡末四碼 1234 於全聯消費 NT$850…" autoFocus /><button className="submit-button" onClick={useNotification}>解析並確認</button></div>}
@@ -574,6 +603,23 @@ export default function Home() {
 
 function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: ExpenseSeed; editing: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="0" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="分期、共同支出等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
+}
+
+function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction; card?: Card; onEdit: () => void }) {
+  return <div className="expense-detail">
+    <span className="eyebrow">消費詳情</span>
+    <div className="detail-hero">
+      <span className="category-icon">{transaction.category.slice(0, 1)}</span>
+      <div><h2>{transaction.merchant || "未命名消費"}</h2><strong>− {money(transaction.amount)}</strong></div>
+    </div>
+    <dl className="detail-list">
+      <div><dt>消費日期</dt><dd>{transaction.date}</dd></div>
+      <div><dt>信用卡</dt><dd>{card ? `${card.name} · •••• ${card.last4 || "未填"}` : "卡片資料已移除"}</dd></div>
+      <div><dt>分類</dt><dd>{transaction.category}</dd></div>
+      <div><dt>備註</dt><dd>{transaction.note || "沒有備註"}</dd></div>
+    </dl>
+    <button className="submit-button" type="button" onClick={onEdit}>編輯這筆花費</button>
+  </div>;
 }
 
 function CardManager({ cards, editingCard, onSubmit, onEdit, onCancelEdit, onDelete }: { cards: Card[]; editingCard: Card | null; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onEdit: (card: Card) => void; onCancelEdit: () => void; onDelete: (id: string) => void }) {
