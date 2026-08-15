@@ -23,7 +23,7 @@ test("server-renders Hanami metadata and loading state", async () => {
   assert.match(html, /<title>花見｜信用卡花費帳本<\/title>/);
   assert.match(html, /安心掌握每一筆信用卡花費/);
   assert.match(html, /正在整理你的帳本/);
-  assert.match(html, /og\.png/);
+  assert.match(html, /og-blue\.png/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
@@ -37,6 +37,10 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(page, /花見備份/);
   assert.match(page, /花見消費/);
   assert.match(page, /parseNotification/);
+  assert.match(page, /實體卡／直接刷卡/);
+  assert.match(page, /Apple Pay/);
+  assert.match(page, /LINE Pay/);
+  assert.match(page, /installmentCount/);
   assert.doesNotMatch(page, /localStorage|sessionStorage|fetch\(/);
   assert.match(manifest, /display:\s*"standalone"/);
   assert.match(worker, /caches\.open/);
@@ -47,16 +51,20 @@ test("keeps financial records device-local and provides recovery", async () => {
 test("parses iOS Shortcut hash options", async () => {
   assert.deepEqual(
     parseShortcutHash("#amount=1,280&merchant=%E5%85%A8%E8%81%AF&last4=1234&category=%E9%A4%90%E9%A3%B2&date=2026-08-03&save=1"),
-    { amount: 1280, merchant: "全聯", last4: "1234", category: "餐飲", date: "2026-08-03", autoSave: true },
+    { amount: 1280, merchant: "全聯", last4: "1234", category: "餐飲", date: "2026-08-03", paymentMethod: undefined, installmentCount: undefined, autoSave: true },
   );
   assert.deepEqual(
     parseShortcutHash("#?%E9%87%91%E9%A1%8D=99&%E5%95%86%E5%AE%B6=%E5%92%96%E5%95%A1"),
-    { amount: 99, merchant: "咖啡", last4: undefined, category: undefined, date: undefined, autoSave: false },
+    { amount: 99, merchant: "咖啡", last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, autoSave: false },
   );
   assert.equal(parseShortcutHash("#section"), null);
   assert.deepEqual(
     parseShortcutHash("#amount=-1&last4=12&date=2026-02-30"),
-    { amount: undefined, merchant: undefined, last4: undefined, category: undefined, date: undefined, autoSave: false },
+    { amount: undefined, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, autoSave: false },
+  );
+  assert.deepEqual(
+    parseShortcutHash("#amount=3600&payment=Apple%20Pay&installments=3"),
+    { amount: 3600, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "Apple Pay", installmentCount: 3, autoSave: false },
   );
   assert.equal(parseShortcutHash("#save=1"), null);
 
