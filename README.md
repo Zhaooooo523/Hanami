@@ -7,7 +7,8 @@
 - 管理多張信用卡、額度、結帳日與繳款截止日
 - 手動新增信用卡消費
 - 依各卡結帳日自動彙整帳單，並記錄已繳／待繳狀態
-- 記錄回饋折抵；分期僅計入當期實際入帳金額
+- 收到回饋後可另行選擇信用卡並記錄折抵
+- 分期輸入消費總額後自動拆分，每月帳單顯示當期金額與期別
 - 貼上銀行消費通知，解析金額、日期與卡號末四碼
 - 查看本月累積花費、剩餘額度與額度使用率
 - 依消費分類統計支出
@@ -22,10 +23,10 @@
 在捷徑中組合並開啟以下網址（商家與分類等文字請使用 URL 編碼）：
 
 ```text
-https://zhaooooo523.github.io/Hanami/#amount=850&merchant=%E5%85%A8%E8%81%AF&last4=1234&category=%E9%A4%90%E9%A3%B2&date=2026-08-03&payment=Apple%20Pay&installments=3&reward=20&save=1
+https://zhaooooo523.github.io/Hanami/#amount=3600&merchant=%E5%85%A8%E8%81%AF&last4=1234&category=%E9%A4%90%E9%A3%B2&date=2026-08-03&payment=Apple%20Pay&installments=3&save=1
 ```
 
-支援參數為 `amount`、`merchant`、`last4`、`category`、`date`、`paymentMethod`（或 `payment`）、`installmentCount`（或 `installments`）、`rewardDeduction`（或 `reward`）、`save`；也可使用中文鍵名 `金額`、`商家`、`卡片末四碼`、`分類`、`日期`、`付款方式`、`分期`、`回饋扣點`、`自動儲存`。日期格式為 `YYYY-MM-DD`，分類需為「餐飲、交通、購物、生活、娛樂、醫療、其他」之一。分期交易的 `amount` 請傳本期實際入帳金額，不要傳全部期數的總價。
+支援參數為 `amount`、`merchant`、`last4`、`category`、`date`、`paymentMethod`（或 `payment`）、`installmentCount`（或 `installments`）、`save`；也可使用中文鍵名 `金額`、`商家`、`卡片末四碼`、`分類`、`日期`、`付款方式`、`分期`、`自動儲存`。日期格式為 `YYYY-MM-DD`，分類需為「餐飲、交通、購物、生活、娛樂、醫療、其他」之一。分期交易的 `amount` 請傳完整消費總額，花見會自動計算各期金額並帶入後續月份。
 
 花見會解析 hash，接著立即清除網址中的暫存資料。加入 `save=1` 時，只有全部欄位有效且卡片末四碼能唯一匹配時才會自動加入帳本；否則會開啟預填表單供使用者修正。省略 `save=1` 時，一律由使用者檢查內容並按下「確認並儲存」。
 
