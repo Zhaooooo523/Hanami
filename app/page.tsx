@@ -25,7 +25,15 @@ type Transaction = {
   note: string;
   paymentMethod: PaymentMethod;
   installmentCount: number;
+  rewardDeduction: number;
   createdAt: string;
+};
+
+type StatementRecord = {
+  id: string;
+  cardId: string;
+  statementDate: string;
+  paidAt?: string;
 };
 
 type Theme = "mist" | "sky" | "lavender";
@@ -37,9 +45,10 @@ type AppSettings = {
   browserEnabled: boolean;
   theme: Theme;
 };
-type AppData = { cards: Card[]; transactions: Transaction[]; settings?: AppSettings };
+type AppData = { cards: Card[]; transactions: Transaction[]; statements?: StatementRecord[]; settings?: AppSettings };
 type Modal = "expense" | "expenseDetail" | "categoryDetail" | "card" | "paste" | "backup" | "alerts" | null;
 type ExpenseSeed = Partial<Transaction>;
+type LedgerView = "transactions" | "statements";
 
 const categories = ["餐飲", "交通", "購物", "生活", "娛樂", "醫療", "其他"];
 const paymentMethods: PaymentMethod[] = ["實體卡／直接刷卡", "Apple Pay", "LINE Pay"];
@@ -51,7 +60,7 @@ const themes: { id: Theme; name: string; description: string; colors: string[] }
   { id: "lavender", name: "薰衣草藍", description: "溫柔雅緻", colors: ["#6475a7", "#e3e6f4", "#f5f5fb"] },
 ];
 const DB_NAME = "spendlight-local";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const defaultSettings: AppSettings = {
   id: "preferences", usagePercent: 80, remainingAmount: 5000, browserEnabled: false, theme: "mist",
@@ -69,6 +78,7 @@ function openDatabase(): Promise<IDBDatabase> {
         store.createIndex("cardId", "cardId");
       }
       if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("statements")) db.createObjectStore("statements", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -108,13 +118,16 @@ async function deleteItem(storeName: string, id: string) {
 async function replaceAll(data: AppData) {
   const db = await openDatabase();
   return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(["cards", "transactions", "settings"], "readwrite");
+    const tx = db.transaction(["cards", "transactions", "statements", "settings"], "readwrite");
     const cardsStore = tx.objectStore("cards");
     const transactionsStore = tx.objectStore("transactions");
     cardsStore.clear();
     transactionsStore.clear();
+    const statementsStore = tx.objectStore("statements");
+    statementsStore.clear();
     data.cards.forEach((item) => cardsStore.put(item));
     data.transactions.forEach((item) => transactionsStore.put(item));
+    data.statements?.forEach((item) => statementsStore.put(item));
     if (data.settings) tx.objectStore("settings").put(data.settings);
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => reject(tx.error);
@@ -135,13 +148,31 @@ const normalizedInstallmentCount = (value?: number) => Number.isInteger(value) &
   : 1;
 const installmentLabel = (transaction: Transaction) => {
   const count = normalizedInstallmentCount(transaction.installmentCount);
-  return count > 1 ? `${count} 期 · 每期約 ${money(Math.ceil(transaction.amount / count))}` : "一次付清";
+  return count > 1 ? `${count} 期 · 本期 ${money(transaction.amount)}` : "一次付清";
 };
+const normalizedRewardDeduction = (value?: number) => Number.isFinite(value) && (value ?? 0) > 0 ? value! : 0;
+const chargedAmount = (transaction: Transaction) => Math.max(transaction.amount - normalizedRewardDeduction(transaction.rewardDeduction), 0);
 const normalizeTransaction = (transaction: Transaction): Transaction => ({
   ...transaction,
   paymentMethod: normalizedPaymentMethod(transaction.paymentMethod),
   installmentCount: normalizedInstallmentCount(transaction.installmentCount),
+  rewardDeduction: normalizedRewardDeduction(transaction.rewardDeduction),
 });
+const dateForDay = (month: string, day: number) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return `${month}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+};
+const previousMonth = (month: string) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, monthNumber - 2, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+const nextMonth = (month: string) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, monthNumber, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+};
 
 function parseNotification(text: string, cards: Card[]) {
   const amountMatches = [...text.matchAll(/(?:NT\$|TWD|新臺幣|新台幣|金額|消費)\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/gi)];
@@ -160,12 +191,14 @@ function parseNotification(text: string, cards: Card[]) {
 export default function Home() {
   const [cards, setCards] = useState<Card[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [statements, setStatements] = useState<StatementRecord[]>([]);
   const [ready, setReady] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState("");
   const [month, setMonth] = useState(today().slice(0, 7));
   const [cardFilter, setCardFilter] = useState("all");
   const [paymentFilter, setPaymentFilter] = useState("all");
+  const [ledgerView, setLedgerView] = useState<LedgerView>("transactions");
   const [noticeText, setNoticeText] = useState("");
   const [expenseSeed, setExpenseSeed] = useState<ExpenseSeed>({});
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -178,10 +211,11 @@ export default function Home() {
   const theme = settings.theme;
 
   useEffect(() => {
-    Promise.all([getAll<Card>("cards"), getAll<Transaction>("transactions"), getAll<AppSettings>("settings")])
-      .then(([storedCards, storedTransactions, storedSettings]) => {
+    Promise.all([getAll<Card>("cards"), getAll<Transaction>("transactions"), getAll<StatementRecord>("statements"), getAll<AppSettings>("settings")])
+      .then(([storedCards, storedTransactions, storedStatements, storedSettings]) => {
         setCards(storedCards);
         setTransactions(storedTransactions.map(normalizeTransaction).sort((a, b) => b.date.localeCompare(a.date)));
+        setStatements(storedStatements);
         if (storedSettings[0]) setSettings({ ...defaultSettings, ...storedSettings[0] });
       })
       .finally(() => setReady(true));
@@ -222,6 +256,7 @@ export default function Home() {
         date: shortcut.date,
         paymentMethod,
         installmentCount: shortcut.installmentCount,
+        rewardDeduction: shortcut.rewardDeduction,
       });
 
       // Hash 只作為一次性傳遞資料；解析後立即從網址列與瀏覽紀錄清除。
@@ -245,6 +280,7 @@ export default function Home() {
           note: "",
           paymentMethod: paymentMethod ?? paymentMethods[0],
           installmentCount: normalizedInstallmentCount(shortcut.installmentCount),
+          rewardDeduction: normalizedRewardDeduction(shortcut.rewardDeduction),
           createdAt: new Date().toISOString(),
         };
         putItem("transactions", transaction).then(() => {
@@ -279,12 +315,12 @@ export default function Home() {
     () => transactions.filter((item) => item.date.startsWith(month)),
     [transactions, month],
   );
-  const totalSpent = monthTransactions.reduce((sum, item) => sum + item.amount, 0);
+  const totalSpent = monthTransactions.reduce((sum, item) => sum + chargedAmount(item), 0);
   const totalLimit = cards.reduce((sum, card) => sum + card.limit, 0);
   const remaining = Math.max(totalLimit - totalSpent, 0);
   const usage = totalLimit ? Math.min((totalSpent / totalLimit) * 100, 100) : 0;
   const cardSummaries = cards.map((card) => {
-    const spent = monthTransactions.filter((item) => item.cardId === card.id).reduce((sum, item) => sum + item.amount, 0);
+    const spent = monthTransactions.filter((item) => item.cardId === card.id).reduce((sum, item) => sum + chargedAmount(item), 0);
     const remaining = card.limit - spent;
     const percent = card.limit ? (spent / card.limit) * 100 : 0;
     return { card, spent, remaining, percent };
@@ -296,14 +332,33 @@ export default function Home() {
     (cardFilter === "all" || item.cardId === cardFilter)
     && (paymentFilter === "all" || normalizedPaymentMethod(item.paymentMethod) === paymentFilter),
   ), [cardFilter, paymentFilter, monthTransactions]);
-  const visibleTotal = visibleTransactions.reduce((sum, item) => sum + item.amount, 0);
+  const visibleTotal = visibleTransactions.reduce((sum, item) => sum + chargedAmount(item), 0);
   const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
     name,
-    value: monthTransactions.filter((item) => item.category === name).reduce((sum, item) => sum + item.amount, 0),
+    value: monthTransactions.filter((item) => item.category === name).reduce((sum, item) => sum + chargedAmount(item), 0),
   })).filter((item) => item.value > 0).sort((a, b) => b.value - a.value);
+  const statementSummaries = cards.map((card) => {
+    const statementDate = dateForDay(month, card.closingDay);
+    const previousStatementDate = dateForDay(previousMonth(month), card.closingDay);
+    const dueMonth = card.dueDay > card.closingDay ? month : nextMonth(month);
+    const dueDate = dateForDay(dueMonth, card.dueDay);
+    const items = transactions.filter((item) => item.cardId === card.id && item.date > previousStatementDate && item.date <= statementDate);
+    const gross = items.reduce((sum, item) => sum + item.amount, 0);
+    const rewards = items.reduce((sum, item) => sum + normalizedRewardDeduction(item.rewardDeduction), 0);
+    const record = statements.find((item) => item.id === `${card.id}:${statementDate}`);
+    return { card, statementDate, previousStatementDate, dueDate, items, gross, rewards, total: Math.max(gross - rewards, 0), record };
+  });
 
   const flash = (message: string) => setToast(message);
+
+  async function toggleStatementPaid(cardId: string, statementDate: string, paid: boolean) {
+    const id = `${cardId}:${statementDate}`;
+    const record: StatementRecord = { id, cardId, statementDate, paidAt: paid ? new Date().toISOString() : undefined };
+    await putItem("statements", record);
+    setStatements((items) => [...items.filter((item) => item.id !== id), record]);
+    flash(paid ? "帳單已標記為已繳" : "帳單已改回待繳");
+  }
 
   async function saveCard(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -328,6 +383,7 @@ export default function Home() {
       date: String(form.get("date")), note: String(form.get("note") ?? "").trim(),
       paymentMethod: normalizedPaymentMethod(String(form.get("paymentMethod") ?? "")),
       installmentCount: normalizedInstallmentCount(Number(form.get("installmentCount"))),
+      rewardDeduction: normalizedRewardDeduction(Number(form.get("rewardDeduction"))),
       createdAt: editingTransaction?.createdAt ?? new Date().toISOString(),
     };
     await putItem("transactions", transaction);
@@ -375,7 +431,7 @@ export default function Home() {
     if (!settings.browserEnabled || typeof Notification === "undefined" || Notification.permission !== "granted") return;
     const card = cards.find((item) => item.id === cardId);
     if (!card) return;
-    const spent = sourceTransactions.filter((item) => item.cardId === cardId && item.date.startsWith(month)).reduce((sum, item) => sum + item.amount, 0);
+    const spent = sourceTransactions.filter((item) => item.cardId === cardId && item.date.startsWith(month)).reduce((sum, item) => sum + chargedAmount(item), 0);
     const left = card.limit - spent;
     const percent = card.limit ? (spent / card.limit) * 100 : 0;
     if (percent >= settings.usagePercent || left <= settings.remainingAmount) {
@@ -432,12 +488,13 @@ export default function Home() {
       usagePercent: Number(percent.toFixed(2)),
     }));
     const payload = JSON.stringify({
-      version: 4,
+      version: 5,
       exportedAt: new Date().toISOString(),
       summaryMonth: month,
       cardLimitSummary,
       cards,
       transactions,
+      statements,
       settings,
     }, null, 2);
     downloadFile(payload, `花見備份-${today()}.json`, "application/json");
@@ -445,10 +502,10 @@ export default function Home() {
   }
 
   function exportCsv() {
-    const transactionRows: (string | number)[][] = [["日期", "商家", "分類", "金額", "信用卡", "付款管道", "分期期數", "每期約", "卡片額度", "備註"], ...transactions.map((item) => {
+    const transactionRows: (string | number)[][] = [["日期", "商家", "分類", "本期金額", "回饋折抵", "實際計入", "信用卡", "付款管道", "分期期數", "卡片額度", "備註"], ...transactions.map((item) => {
       const card = cards.find((candidate) => candidate.id === item.cardId);
       const count = normalizedInstallmentCount(item.installmentCount);
-      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", normalizedPaymentMethod(item.paymentMethod), count, Math.ceil(item.amount / count), card?.limit ?? "", item.note];
+      return [item.date, item.merchant, item.category, item.amount, normalizedRewardDeduction(item.rewardDeduction), chargedAmount(item), card ? `${card.bank} ${card.name} ${card.last4}` : "", normalizedPaymentMethod(item.paymentMethod), count, card?.limit ?? "", item.note];
     })];
     const cardRows: (string | number)[][] = [
       [],
@@ -472,8 +529,10 @@ export default function Home() {
       if (!Array.isArray(raw.cards) || !Array.isArray(raw.transactions)) throw new Error("invalid");
       const restoredSettings = raw.settings ? { ...defaultSettings, ...raw.settings } : settings;
       const restoredTransactions = raw.transactions.map((item: Transaction) => normalizeTransaction(item));
-      await replaceAll({ cards: raw.cards, transactions: restoredTransactions, settings: restoredSettings });
+      const restoredStatements = Array.isArray(raw.statements) ? raw.statements : [];
+      await replaceAll({ cards: raw.cards, transactions: restoredTransactions, statements: restoredStatements, settings: restoredSettings });
       setCards(raw.cards); setTransactions(restoredTransactions.sort((a: Transaction, b: Transaction) => b.date.localeCompare(a.date)));
+      setStatements(restoredStatements);
       setSettings(restoredSettings);
       setModal(null); flash("備份已成功還原");
     } catch { flash("這不是有效的花見備份檔"); }
@@ -589,36 +648,55 @@ export default function Home() {
       </section>
 
       <section className="transactions-section">
-        <div className="panel-heading transactions-heading">
-          <div><span className="eyebrow">近期明細</span><h2>{month.replace("-", " 年 ")} 月</h2></div>
-          <div className="transaction-tools">
-            <label className="card-filter">信用卡
-              <select value={cardFilter} onChange={(event) => setCardFilter(event.target.value)} aria-label="篩選信用卡">
-                <option value="all">全部信用卡</option>
-                {cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}
-              </select>
-            </label>
-            <label className="card-filter">付款管道
-              <select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} aria-label="篩選付款管道">
-                <option value="all">全部付款管道</option>
-                {paymentMethods.map((method) => <option key={method}>{method}</option>)}
-              </select>
-            </label>
-            <span className="record-count">{visibleTransactions.length} 筆 · {money(visibleTotal)}</span>
-          </div>
+        <div className="ledger-tabs" role="tablist" aria-label="明細顯示方式">
+          <button className={ledgerView === "transactions" ? "active" : ""} onClick={() => setLedgerView("transactions")} role="tab" aria-selected={ledgerView === "transactions"}>消費明細</button>
+          <button className={ledgerView === "statements" ? "active" : ""} onClick={() => setLedgerView("statements")} role="tab" aria-selected={ledgerView === "statements"}>帳單管理</button>
         </div>
-        {visibleTransactions.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthTransactions.length ? "這張卡本月沒有消費" : "這個月還沒有消費紀錄"}</strong><p>{monthTransactions.length ? "可以切換其他信用卡或查看全部紀錄。" : "從手動新增或貼上銀行通知開始。"}</p></div> : (
-          <div className="transaction-list">{visibleTransactions.map((item) => {
-            const card = cards.find((candidate) => candidate.id === item.cardId);
-            return <article className="transaction-row" key={item.id} role="button" tabIndex={0} onClick={() => viewExpense(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(item); } }} aria-label={`查看 ${item.merchant || "未命名消費"} 詳情`}>
-              <div className="category-icon">{item.category.slice(0, 1)}</div>
-              <div className="transaction-main"><strong>{item.merchant || "未命名消費"}</strong><span>{item.date} · {item.category}{card ? ` · ${card.name}` : ""} · {normalizedPaymentMethod(item.paymentMethod)}{normalizedInstallmentCount(item.installmentCount) > 1 ? ` · ${normalizedInstallmentCount(item.installmentCount)} 期` : ""}</span></div>
-              <strong className="transaction-amount">− {money(item.amount)}</strong>
-              <span className="transaction-view" aria-hidden="true">查看 →</span>
-              <button className="delete-button" onClick={(event) => { event.stopPropagation(); removeTransaction(item.id); }} aria-label={`刪除 ${item.merchant} 消費`}>×</button>
+        {ledgerView === "transactions" ? <>
+          <div className="panel-heading transactions-heading">
+            <div><span className="eyebrow">近期明細</span><h2>{month.replace("-", " 年 ")} 月</h2></div>
+            <div className="transaction-tools">
+              <label className="card-filter">信用卡
+                <select value={cardFilter} onChange={(event) => setCardFilter(event.target.value)} aria-label="篩選信用卡">
+                  <option value="all">全部信用卡</option>
+                  {cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}
+                </select>
+              </label>
+              <label className="card-filter">付款管道
+                <select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} aria-label="篩選付款管道">
+                  <option value="all">全部付款管道</option>
+                  {paymentMethods.map((method) => <option key={method}>{method}</option>)}
+                </select>
+              </label>
+              <span className="record-count">{visibleTransactions.length} 筆 · {money(visibleTotal)}</span>
+            </div>
+          </div>
+          {visibleTransactions.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthTransactions.length ? "這張卡本月沒有消費" : "這個月還沒有消費紀錄"}</strong><p>{monthTransactions.length ? "可以切換其他信用卡或查看全部紀錄。" : "從手動新增或貼上銀行通知開始。"}</p></div> : (
+            <div className="transaction-list">{visibleTransactions.map((item) => {
+              const card = cards.find((candidate) => candidate.id === item.cardId);
+              const reward = normalizedRewardDeduction(item.rewardDeduction);
+              return <article className="transaction-row" key={item.id} role="button" tabIndex={0} onClick={() => viewExpense(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(item); } }} aria-label={`查看 ${item.merchant || "未命名消費"} 詳情`}>
+                <div className="category-icon">{item.category.slice(0, 1)}</div>
+                <div className="transaction-main"><strong>{item.merchant || "未命名消費"}</strong><span>{item.date} · {item.category}{card ? ` · ${card.name}` : ""} · {normalizedPaymentMethod(item.paymentMethod)}{normalizedInstallmentCount(item.installmentCount) > 1 ? ` · ${normalizedInstallmentCount(item.installmentCount)} 期` : ""}{reward ? ` · 回饋折抵 ${money(reward)}` : ""}</span></div>
+                <strong className="transaction-amount">− {money(chargedAmount(item))}</strong>
+                <span className="transaction-view" aria-hidden="true">查看 →</span>
+                <button className="delete-button" onClick={(event) => { event.stopPropagation(); removeTransaction(item.id); }} aria-label={`刪除 ${item.merchant} 消費`}>×</button>
+              </article>;
+            })}</div>
+          )}
+        </> : <div className="statements-view">
+          <div className="statement-heading"><div><span className="eyebrow">結帳週期</span><h2>{month.replace("-", " 年 ")} 月帳單</h2></div><p>依信用卡結帳日自動彙整；金額已扣除回饋折抵。</p></div>
+          {cards.length === 0 ? <div className="empty-transactions"><span>帳</span><strong>先加入信用卡</strong><p>設定結帳日與繳款截止日後，就能在這裡管理帳單。</p></div> : <div className="statement-list">{statementSummaries.map(({ card, statementDate, previousStatementDate, dueDate, items, gross, rewards, total, record }) => {
+            const issued = statementDate <= today();
+            const paid = Boolean(record?.paidAt);
+            return <article className={`statement-card${paid ? " paid" : ""}`} key={`${card.id}:${statementDate}`}>
+              <div className="statement-card-top"><span className="card-swatch" style={{ background: card.color }}>{card.bank.slice(0, 1)}</span><div><strong>{card.name}</strong><small>{previousStatementDate} 後至 {statementDate} · {items.length} 筆</small></div><span className={`statement-status ${paid ? "paid" : issued ? "due" : "pending"}`}>{paid ? "已繳" : issued ? "待繳" : "未出帳"}</span></div>
+              <div className="statement-amount"><span>應繳金額</span><strong>{money(total)}</strong></div>
+              <div className="statement-meta"><span>本期消費 {money(gross)}</span><span>回饋折抵 −{money(rewards)}</span><span>繳款期限 {dueDate}</span></div>
+              <label className="statement-paid"><input type="checkbox" checked={paid} disabled={!issued} onChange={(event) => toggleStatementPaid(card.id, statementDate, event.target.checked)} /><span>{issued ? "記錄為已繳清" : `${statementDate} 結帳後可記錄繳款`}</span></label>
             </article>;
-          })}</div>
-        )}
+          })}</div>}
+        </div>}
       </section>
 
       <footer><p>花見不會上傳你的消費資料</p><span>資料保存在此瀏覽器 · 請定期備份</span></footer>
@@ -642,7 +720,7 @@ export default function Home() {
 
 function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: ExpenseSeed; editing: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const selectedInstallmentCount = normalizedInstallmentCount(seed.installmentCount);
-  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="刷卡總額" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>付款管道<select name="paymentMethod" defaultValue={normalizedPaymentMethod(seed.paymentMethod)} required>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label>分期付款<select name="installmentCount" defaultValue={selectedInstallmentCount} required>{!installmentOptions.includes(selectedInstallmentCount) && <option value={selectedInstallmentCount}>{selectedInstallmentCount} 期</option>}{installmentOptions.map((count) => <option key={count} value={count}>{count === 1 ? "一次付清" : `${count} 期`}</option>)}</select></label><p className="form-help wide">金額請填刷卡總額；分期不會重複計入額度。</p><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="共同支出、報帳等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
+  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" defaultValue={seed.amount || ""} placeholder="本期金額" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>付款管道<select name="paymentMethod" defaultValue={normalizedPaymentMethod(seed.paymentMethod)} required>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label>分期付款<select name="installmentCount" defaultValue={selectedInstallmentCount} required>{!installmentOptions.includes(selectedInstallmentCount) && <option value={selectedInstallmentCount}>{selectedInstallmentCount} 期</option>}{installmentOptions.map((count) => <option key={count} value={count}>{count === 1 ? "一次付清" : `${count} 期`}</option>)}</select></label><label>回饋折抵（選填）<input name="rewardDeduction" type="number" min="0" step="1" defaultValue={normalizedRewardDeduction(seed.rewardDeduction) || ""} placeholder="0" /></label><p className="form-help">此金額會從本期消費與帳單扣除。</p><p className="form-help wide">分期消費只填這一期實際入帳的金額，不需填全部分期總價。</p><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="共同支出、報帳等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
 }
 
 function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction; card?: Card; onEdit: () => void }) {
@@ -650,7 +728,7 @@ function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction
     <span className="eyebrow">消費詳情</span>
     <div className="detail-hero">
       <span className="category-icon">{transaction.category.slice(0, 1)}</span>
-      <div><h2>{transaction.merchant || "未命名消費"}</h2><strong>− {money(transaction.amount)}</strong></div>
+      <div><h2>{transaction.merchant || "未命名消費"}</h2><strong>− {money(chargedAmount(transaction))}</strong></div>
     </div>
     <dl className="detail-list">
       <div><dt>消費日期</dt><dd>{transaction.date}</dd></div>
@@ -658,6 +736,8 @@ function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction
       <div><dt>分類</dt><dd>{transaction.category}</dd></div>
       <div><dt>付款管道</dt><dd>{normalizedPaymentMethod(transaction.paymentMethod)}</dd></div>
       <div><dt>付款方式</dt><dd>{installmentLabel(transaction)}</dd></div>
+      <div><dt>本期原金額</dt><dd>{money(transaction.amount)}</dd></div>
+      <div><dt>回饋折抵</dt><dd>{normalizedRewardDeduction(transaction.rewardDeduction) ? `− ${money(normalizedRewardDeduction(transaction.rewardDeduction))}` : "沒有折抵"}</dd></div>
       <div><dt>備註</dt><dd>{transaction.note || "沒有備註"}</dd></div>
     </dl>
     <button className="submit-button" type="button" onClick={onEdit}>編輯這筆花費</button>
@@ -665,7 +745,7 @@ function ExpenseDetail({ transaction, card, onEdit }: { transaction: Transaction
 }
 
 function CategoryDetail({ category, month, transactions, cards, onSelect }: { category: string; month: string; transactions: Transaction[]; cards: Card[]; onSelect: (transaction: Transaction) => void }) {
-  const total = transactions.reduce((sum, transaction) => sum + transaction.amount, 0);
+  const total = transactions.reduce((sum, transaction) => sum + chargedAmount(transaction), 0);
   return <div className="category-detail">
     <span className="eyebrow">{month.replace("-", " 年 ")} 月分類明細</span>
     <div className="category-detail-heading"><div><h2>{category}</h2><p>{transactions.length} 筆消費</p></div><strong>{money(total)}</strong></div>
@@ -674,7 +754,7 @@ function CategoryDetail({ category, month, transactions, cards, onSelect }: { ca
       return <button type="button" key={transaction.id} onClick={() => onSelect(transaction)} aria-label={`查看 ${transaction.merchant} ${money(transaction.amount)} 詳情`}>
         <span className="category-detail-date">{transaction.date.slice(8, 10)}<small>日</small></span>
         <span className="category-detail-main"><strong>{transaction.merchant || "未命名消費"}</strong><small>{card?.name ?? "卡片資料已移除"} · {normalizedPaymentMethod(transaction.paymentMethod)}{normalizedInstallmentCount(transaction.installmentCount) > 1 ? ` · ${normalizedInstallmentCount(transaction.installmentCount)} 期` : ""}</small></span>
-        <strong className="category-detail-amount">{money(transaction.amount)}</strong>
+        <strong className="category-detail-amount">{money(chargedAmount(transaction))}</strong>
         <span className="category-detail-arrow" aria-hidden="true">›</span>
       </button>;
     })}</div>}

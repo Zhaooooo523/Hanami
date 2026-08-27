@@ -53,20 +53,24 @@ test("keeps financial records device-local and provides recovery", async () => {
 test("parses iOS Shortcut hash options", async () => {
   assert.deepEqual(
     parseShortcutHash("#amount=1,280&merchant=%E5%85%A8%E8%81%AF&last4=1234&category=%E9%A4%90%E9%A3%B2&date=2026-08-03&save=1"),
-    { amount: 1280, merchant: "全聯", last4: "1234", category: "餐飲", date: "2026-08-03", paymentMethod: undefined, installmentCount: undefined, autoSave: true },
+    { amount: 1280, merchant: "全聯", last4: "1234", category: "餐飲", date: "2026-08-03", paymentMethod: undefined, installmentCount: undefined, rewardDeduction: undefined, autoSave: true },
   );
   assert.deepEqual(
     parseShortcutHash("#?%E9%87%91%E9%A1%8D=99&%E5%95%86%E5%AE%B6=%E5%92%96%E5%95%A1"),
-    { amount: 99, merchant: "咖啡", last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, autoSave: false },
+    { amount: 99, merchant: "咖啡", last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, rewardDeduction: undefined, autoSave: false },
   );
   assert.equal(parseShortcutHash("#section"), null);
   assert.deepEqual(
     parseShortcutHash("#amount=-1&last4=12&date=2026-02-30"),
-    { amount: undefined, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, autoSave: false },
+    { amount: undefined, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: undefined, installmentCount: undefined, rewardDeduction: undefined, autoSave: false },
   );
   assert.deepEqual(
-    parseShortcutHash("#amount=3600&payment=Apple%20Pay&installments=3"),
-    { amount: 3600, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "Apple Pay", installmentCount: 3, autoSave: false },
+    parseShortcutHash("#amount=1200&payment=Apple%20Pay&installments=3&reward=50"),
+    { amount: 1200, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "Apple Pay", installmentCount: 3, rewardDeduction: 50, autoSave: false },
+  );
+  assert.deepEqual(
+    parseShortcutHash("#%E9%87%91%E9%A1%8D=500&%E4%BB%98%E6%AC%BE%E6%96%B9%E5%BC%8F=LINE%20Pay&%E5%88%86%E6%9C%9F=6&%E5%9B%9E%E9%A5%8B%E6%89%A3%E9%BB%9E=25"),
+    { amount: 500, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "LINE Pay", installmentCount: 6, rewardDeduction: 25, autoSave: false },
   );
   assert.equal(parseShortcutHash("#save=1"), null);
 

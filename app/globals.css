@@ -160,6 +160,9 @@ h2 { font-size: 25px; font-weight: 500; }
 .category-bar i { display: block; height: 100%; background: var(--green); border-radius: inherit; }
 
 .transactions-section { margin-top: 18px; padding: 25px; }
+.ledger-tabs { display: inline-flex; gap: 4px; margin-bottom: 23px; padding: 4px; border-radius: 12px; background: var(--row); }
+.ledger-tabs button { border: 0; border-radius: 9px; padding: 9px 16px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 800; }
+.ledger-tabs button.active { background: var(--surface); color: var(--green); box-shadow: 0 2px 9px rgba(var(--shadow-rgb),.09); }
 .transaction-tools { display: flex; align-items: flex-end; gap: 14px; }
 .card-filter { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
 .card-filter select { min-width: 190px; border: 1px solid var(--line); background: var(--field); color: var(--ink); border-radius: 10px; padding: 9px 34px 9px 11px; font-size: 12px; outline: none; }
@@ -179,6 +182,27 @@ h2 { font-size: 25px; font-weight: 500; }
 .transaction-view { color: var(--green); font-size: 11px; font-weight: 800; white-space: nowrap; }
 .delete-button { opacity: 0; border: 0; background: transparent; color: #9b6a5c; font-size: 21px; }
 .transaction-row:hover .delete-button, .delete-button:focus { opacity: 1; }
+.statement-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.statement-heading p { max-width: 330px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: right; }
+.statement-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-top: 22px; }
+.statement-card { padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: var(--field); }
+.statement-card.paid { background: rgba(231,236,230,.65); }
+.statement-card-top { display: grid; grid-template-columns: 42px minmax(0,1fr) auto; align-items: center; gap: 11px; }
+.statement-card-top .card-swatch { width: 42px; height: 32px; }
+.statement-card-top strong, .statement-card-top small { display: block; }
+.statement-card-top small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.statement-status { border-radius: 999px; padding: 5px 8px; font-size: 10px; font-weight: 900; }
+.statement-status.paid { background: #dceadf; color: #477052; }
+.statement-status.due { background: #fff0d8; color: #8b561d; }
+.statement-status.pending { background: #e9ece9; color: var(--muted); }
+.statement-amount { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.statement-amount span { color: var(--muted); font-size: 11px; }
+.statement-amount strong { color: var(--green); font: 27px Georgia, serif; }
+.statement-meta { display: grid; gap: 6px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.statement-meta span { display: flex; justify-content: space-between; }
+.statement-paid { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--ink); font-size: 11px; font-weight: 800; }
+.statement-paid input { width: 17px; height: 17px; accent-color: var(--green); }
+.statement-paid input:disabled + span { color: var(--muted); }
 footer { padding: 32px 3px 0; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
 footer p { margin: 0; color: var(--green); font-weight: 700; }
 
@@ -273,6 +297,7 @@ footer p { margin: 0; color: var(--green); font-weight: 700; }
   .credit-numbers { grid-column: 2; display: flex; justify-content: space-between; text-align: left; }
   .credit-row > .row-edit-button { grid-column: 3; grid-row: 1 / span 2; }
   .transactions-heading { align-items: flex-end; }
+  .statement-list { grid-template-columns: 1fr; }
   .transaction-tools { align-items: flex-end; flex-direction: column; gap: 7px; }
   .card-filter select { min-width: 158px; max-width: 48vw; }
   .transaction-row { grid-template-columns: 38px minmax(0,1fr) auto; gap: 10px; }
@@ -293,6 +318,8 @@ footer p { margin: 0; color: var(--green); font-weight: 700; }
   .month-picker { max-width: 122px; }
   .remaining-alert-banner { grid-template-columns: 32px 1fr; }
   .remaining-alert-banner small { grid-column: 2; }
+  .statement-heading { display: block; }
+  .statement-heading p { margin-top: 9px; text-align: left; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }
