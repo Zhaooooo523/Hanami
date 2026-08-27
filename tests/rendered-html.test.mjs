@@ -41,6 +41,9 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(page, /Apple Pay/);
   assert.match(page, /LINE Pay/);
   assert.match(page, /installmentCount/);
+  assert.match(page, /自行修改金額/);
+  assert.match(page, /visibleLedgerEntries/);
+  assert.match(page, /回饋折抵/);
   assert.match(page, /CategoryDetail/);
   assert.match(page, /月分類明細/);
   assert.doesNotMatch(page, /localStorage|sessionStorage|fetch\(/);

@@ -51,6 +51,7 @@ type StatementRecord = {
   cardId: string;
   statementDate: string;
   paidAt?: string;
+  amountOverride?: number;
 };
 
 type Theme = "mist" | "sky" | "lavender";
@@ -177,7 +178,10 @@ const money = (value: number) => new Intl.NumberFormat("zh-TW", {
   style: "currency", currency: "TWD", maximumFractionDigits: 0,
 }).format(value);
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const normalizedPaymentMethod = (value?: string): PaymentMethod => paymentMethods.includes(value as PaymentMethod)
   ? value as PaymentMethod
@@ -253,6 +257,7 @@ export default function Home() {
   const [rewards, setRewards] = useState<RewardCredit[]>([]);
   const [statements, setStatements] = useState<StatementRecord[]>([]);
   const [ready, setReady] = useState(false);
+  const [dayStamp, setDayStamp] = useState(today());
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState("");
   const [month, setMonth] = useState(today().slice(0, 7));
@@ -284,6 +289,11 @@ export default function Home() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register(`${BASE_PATH}/sw.js`, { scope: `${BASE_PATH}/` }).catch(() => undefined);
     }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setDayStamp(today()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -394,7 +404,14 @@ export default function Home() {
     (cardFilter === "all" || item.transaction.cardId === cardFilter)
     && (paymentFilter === "all" || normalizedPaymentMethod(item.transaction.paymentMethod) === paymentFilter),
   ), [cardFilter, paymentFilter, monthCharges]);
-  const visibleTotal = visibleTransactions.reduce((sum, item) => sum + item.amount, 0);
+  const visibleRewards = useMemo(() => monthRewards.filter((item) =>
+    (cardFilter === "all" || item.cardId === cardFilter) && paymentFilter === "all",
+  ), [cardFilter, paymentFilter, monthRewards]);
+  const visibleLedgerEntries = useMemo(() => [
+    ...visibleTransactions.map((charge) => ({ kind: "charge" as const, key: charge.key, date: charge.date, charge })),
+    ...visibleRewards.map((reward) => ({ kind: "reward" as const, key: reward.id, date: reward.date, reward })),
+  ].sort((a, b) => b.date.localeCompare(a.date)), [visibleRewards, visibleTransactions]);
+  const visibleTotal = Math.max(visibleTransactions.reduce((sum, item) => sum + item.amount, 0) - visibleRewards.reduce((sum, item) => sum + item.amount, 0), 0);
   const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
     name,
@@ -410,17 +427,32 @@ export default function Home() {
     const gross = items.reduce((sum, item) => sum + item.amount, 0);
     const rewardTotal = rewardItems.reduce((sum, item) => sum + item.amount, 0);
     const record = statements.find((item) => item.id === `${card.id}:${statementDate}`);
-    return { card, statementDate, previousStatementDate, dueDate, items, rewardItems, gross, rewardTotal, total: Math.max(gross - rewardTotal, 0), record };
+    const calculatedTotal = Math.max(gross - rewardTotal, 0);
+    const total = record?.amountOverride ?? calculatedTotal;
+    return { card, statementDate, previousStatementDate, dueDate, items, rewardItems, gross, rewardTotal, calculatedTotal, total, record };
   });
 
   const flash = (message: string) => setToast(message);
 
   async function toggleStatementPaid(cardId: string, statementDate: string, paid: boolean) {
     const id = `${cardId}:${statementDate}`;
-    const record: StatementRecord = { id, cardId, statementDate, paidAt: paid ? new Date().toISOString() : undefined };
+    const existing = statements.find((item) => item.id === id);
+    const record: StatementRecord = { ...existing, id, cardId, statementDate, paidAt: paid ? new Date().toISOString() : undefined };
     await putItem("statements", record);
     setStatements((items) => [...items.filter((item) => item.id !== id), record]);
     flash(paid ? "帳單已標記為已繳" : "帳單已改回待繳");
+  }
+
+  async function saveStatementAmount(event: FormEvent<HTMLFormElement>, cardId: string, statementDate: string) {
+    event.preventDefault();
+    const id = `${cardId}:${statementDate}`;
+    const form = new FormData(event.currentTarget);
+    const amountOverride = Number(form.get("statementAmount"));
+    const existing = statements.find((item) => item.id === id);
+    const record: StatementRecord = { ...existing, id, cardId, statementDate, amountOverride };
+    await putItem("statements", record);
+    setStatements((items) => [...items.filter((item) => item.id !== id), record]);
+    flash("帳單金額已更新");
   }
 
   async function saveCard(event: FormEvent<HTMLFormElement>) {
@@ -776,11 +808,23 @@ export default function Home() {
                   {paymentMethods.map((method) => <option key={method}>{method}</option>)}
                 </select>
               </label>
-              <span className="record-count">{visibleTransactions.length} 筆 · {money(visibleTotal)}</span>
+              <span className="record-count">{visibleLedgerEntries.length} 筆 · {money(visibleTotal)}</span>
             </div>
           </div>
-          {visibleTransactions.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthCharges.length ? "這張卡本月沒有消費" : "這個月還沒有消費紀錄"}</strong><p>{monthCharges.length ? "可以切換其他信用卡或查看全部紀錄。" : "從手動新增或貼上銀行通知開始。"}</p></div> : (
-            <div className="transaction-list">{visibleTransactions.map((item) => {
+          {visibleLedgerEntries.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthCharges.length || monthRewards.length ? "目前篩選條件沒有明細" : "這個月還沒有消費紀錄"}</strong><p>{monthCharges.length || monthRewards.length ? "可以切換其他信用卡或付款管道。" : "從手動新增、回饋折抵或貼上銀行通知開始。"}</p></div> : (
+            <div className="transaction-list">{visibleLedgerEntries.map((entry) => {
+              if (entry.kind === "reward") {
+                const reward = entry.reward;
+                const card = cards.find((candidate) => candidate.id === reward.cardId);
+                return <article className="transaction-row reward-row" key={entry.key}>
+                  <div className="category-icon">回</div>
+                  <div className="transaction-main"><strong>回饋折抵</strong><span>{reward.date}{card ? ` · ${card.name}` : ""}{reward.note ? ` · ${reward.note}` : ""}</span></div>
+                  <strong className="transaction-amount">＋ {money(reward.amount)}</strong>
+                  <span className="transaction-view">折抵</span>
+                  <button className="delete-button" onClick={() => removeReward(reward.id)} aria-label={`刪除 ${money(reward.amount)} 回饋折抵`}>×</button>
+                </article>;
+              }
+              const item = entry.charge;
               const transaction = item.transaction;
               const card = cards.find((candidate) => candidate.id === transaction.cardId);
               return <article className="transaction-row" key={item.key} role="button" tabIndex={0} onClick={() => viewExpense(transaction, item.installmentNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(transaction, item.installmentNumber); } }} aria-label={`查看 ${transaction.merchant || "未命名消費"} 詳情`}>
@@ -793,14 +837,15 @@ export default function Home() {
             })}</div>
           )}
         </> : <div className="statements-view">
-          <div className="statement-heading"><div><span className="eyebrow">結帳週期</span><h2>{month.replace("-", " 年 ")} 月帳單</h2></div><p>依信用卡結帳日自動彙整；金額已扣除回饋折抵。</p></div>
-          {cards.length === 0 ? <div className="empty-transactions"><span>帳</span><strong>先加入信用卡</strong><p>設定結帳日與繳款截止日後，就能在這裡管理帳單。</p></div> : <div className="statement-list">{statementSummaries.map(({ card, statementDate, previousStatementDate, dueDate, items, rewardItems, gross, rewardTotal, total, record }) => {
-            const issued = statementDate <= today();
+          <div className="statement-heading"><div><span className="eyebrow">結帳週期</span><h2>{month.replace("-", " 年 ")} 月帳單</h2></div><p>結帳日前顯示預估帳單；到卡片設定的結帳日後會自動轉為正式待繳帳單。</p></div>
+          {cards.length === 0 ? <div className="empty-transactions"><span>帳</span><strong>先加入信用卡</strong><p>設定結帳日與繳款截止日後，就能在這裡管理帳單。</p></div> : <div className="statement-list">{statementSummaries.map(({ card, statementDate, previousStatementDate, dueDate, items, rewardItems, gross, rewardTotal, calculatedTotal, total, record }) => {
+            const issued = statementDate <= dayStamp;
             const paid = Boolean(record?.paidAt);
             return <article className={`statement-card${paid ? " paid" : ""}`} key={`${card.id}:${statementDate}`}>
               <div className="statement-card-top"><span className="card-swatch" style={{ background: card.color }}>{card.bank.slice(0, 1)}</span><div><strong>{card.name}</strong><small>{previousStatementDate} 後至 {statementDate} · {items.length} 筆</small></div><span className={`statement-status ${paid ? "paid" : issued ? "due" : "pending"}`}>{paid ? "已繳" : issued ? "待繳" : "未出帳"}</span></div>
-              <div className="statement-amount"><span>應繳金額</span><strong>{money(total)}</strong></div>
+              <div className="statement-amount"><span>{issued ? "正式應繳金額" : "預估帳單金額"}</span><strong>{money(total)}</strong></div>
               <div className="statement-meta"><span>本期消費 {money(gross)}</span><span>回饋折抵 −{money(rewardTotal)}</span><span>繳款期限 {dueDate}</span></div>
+              <form className="statement-amount-editor" key={`${record?.amountOverride ?? calculatedTotal}`} onSubmit={(event) => saveStatementAmount(event, card.id, statementDate)}><label>自行修改金額<input name="statementAmount" type="number" min="0" step="1" defaultValue={total} required /></label><button type="submit">儲存金額</button>{record?.amountOverride !== undefined && record.amountOverride !== calculatedTotal && <small>系統計算為 {money(calculatedTotal)}，目前使用手動金額。</small>}</form>
               {(items.length > 0 || rewardItems.length > 0) && <div className="statement-items">{items.map((item) => <div key={item.key}><span>{item.transaction.merchant}{item.installmentCount > 1 ? <small>第 {item.installmentNumber}／{item.installmentCount} 期</small> : null}</span><strong>{money(item.amount)}</strong></div>)}{rewardItems.map((reward) => <div className="reward-item" key={reward.id}><span>回饋折抵{reward.note ? <small>{reward.note}</small> : null}</span><strong>− {money(reward.amount)}</strong><button onClick={() => removeReward(reward.id)} aria-label={`刪除 ${money(reward.amount)} 回饋折抵`}>×</button></div>)}</div>}
               <label className="statement-paid"><input type="checkbox" checked={paid} disabled={!issued} onChange={(event) => toggleStatementPaid(card.id, statementDate, event.target.checked)} /><span>{issued ? "記錄為已繳清" : `${statementDate} 結帳後可記錄繳款`}</span></label>
             </article>;
