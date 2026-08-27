@@ -15,8 +15,8 @@ const parameterNames = {
   last4: ["last4", "card", "卡片末四碼"],
   category: ["category", "分類"],
   date: ["date", "日期"],
-  paymentMethod: ["paymentMethod", "payment", "付款管道"],
-  installmentCount: ["installmentCount", "installments", "分期期數"],
+  paymentMethod: ["paymentMethod", "payment", "付款管道", "付款方式"],
+  installmentCount: ["installmentCount", "installments", "分期期數", "分期"],
   autoSave: ["save", "autoSave", "自動儲存"],
 } as const;
 

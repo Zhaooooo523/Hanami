@@ -41,6 +41,9 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(page, /Apple Pay/);
   assert.match(page, /LINE Pay/);
   assert.match(page, /installmentCount/);
+  assert.match(page, /自行修改金額/);
+  assert.match(page, /visibleLedgerEntries/);
+  assert.match(page, /回饋折抵/);
   assert.match(page, /CategoryDetail/);
   assert.match(page, /月分類明細/);
   assert.doesNotMatch(page, /localStorage|sessionStorage|fetch\(/);
@@ -67,6 +70,10 @@ test("parses iOS Shortcut hash options", async () => {
   assert.deepEqual(
     parseShortcutHash("#amount=3600&payment=Apple%20Pay&installments=3"),
     { amount: 3600, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "Apple Pay", installmentCount: 3, autoSave: false },
+  );
+  assert.deepEqual(
+    parseShortcutHash("#%E9%87%91%E9%A1%8D=3000&%E4%BB%98%E6%AC%BE%E6%96%B9%E5%BC%8F=LINE%20Pay&%E5%88%86%E6%9C%9F=6"),
+    { amount: 3000, merchant: undefined, last4: undefined, category: undefined, date: undefined, paymentMethod: "LINE Pay", installmentCount: 6, autoSave: false },
   );
   assert.equal(parseShortcutHash("#save=1"), null);
 
