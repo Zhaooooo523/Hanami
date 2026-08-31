@@ -182,7 +182,7 @@ h2 { font-size: 25px; font-weight: 500; }
 .transaction-main strong, .transaction-main span { display: block; }
 .transaction-main span { color: var(--muted); font-size: 11px; margin-top: 3px; }
 .transaction-amount { font-size: 14px; }
-.transaction-view { color: var(--green); font-size: 11px; font-weight: 800; white-space: nowrap; }
+.transaction-view { border: 0; background: transparent; color: var(--green); font-size: 11px; font-weight: 800; white-space: nowrap; cursor: pointer; }
 .delete-button { opacity: 0; border: 0; background: transparent; color: #9b6a5c; font-size: 21px; }
 .transaction-row:hover .delete-button, .delete-button:focus { opacity: 1; }
 .statement-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
@@ -213,8 +213,10 @@ h2 { font-size: 25px; font-weight: 500; }
 .statement-items span, .statement-items small { display: block; min-width: 0; }
 .statement-items small { margin-top: 2px; color: var(--muted); font-size: 9px; }
 .statement-items strong { white-space: nowrap; }
-.statement-items .reward-item { grid-template-columns: minmax(0,1fr) auto 20px; color: var(--green); }
+.statement-items .reward-item { grid-template-columns: minmax(0,1fr) auto 48px; color: var(--green); }
 .statement-items .reward-item button { border: 0; background: transparent; color: #9b6252; font-size: 17px; }
+.statement-items .reward-actions { display: flex; align-items: center; justify-content: flex-end; }
+.statement-items .reward-actions button:first-child { color: var(--green); font-size: 11px; font-weight: 800; }
 .statement-paid { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--ink); font-size: 11px; font-weight: 800; }
 .statement-paid input { width: 17px; height: 17px; accent-color: var(--green); }
 .statement-paid input:disabled + span { color: var(--muted); }
