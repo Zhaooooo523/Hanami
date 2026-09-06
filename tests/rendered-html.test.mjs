@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 import { parseShortcutHash } from "../app/shortcut-entry.ts";
+import { billingCycleForCard, expandInstallments, summarizeChargeUsage } from "../app/finance.ts";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -41,6 +42,8 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(page, /Apple Pay/);
   assert.match(page, /LINE Pay/);
   assert.match(page, /installmentCount/);
+  assert.match(page, /設為特別標記/);
+  assert.match(page, /不計入額度統計/);
   assert.match(page, /自行修改金額/);
   assert.match(page, /visibleLedgerEntries/);
   assert.match(page, /回饋折抵/);
@@ -53,6 +56,37 @@ test("keeps financial records device-local and provides recovery", async () => {
   assert.match(worker, /caches\.open/);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
+});
+
+test("expands installments and includes closing-day charges in the statement cycle", () => {
+  const charges = expandInstallments([{
+    id: "installment-1",
+    amount: 1000,
+    date: "2026-01-31",
+    installmentCount: 3,
+  }]);
+
+  assert.deepEqual(charges.map(({ date, amount, installmentNumber }) => ({ date, amount, installmentNumber })), [
+    { date: "2026-01-31", amount: 334, installmentNumber: 1 },
+    { date: "2026-02-28", amount: 333, installmentNumber: 2 },
+    { date: "2026-03-31", amount: 333, installmentNumber: 3 },
+  ]);
+  assert.deepEqual(billingCycleForCard("2026-03", { closingDay: 15 }), {
+    statementDate: "2026-03-15",
+    startDate: "2026-02-16",
+    endDate: "2026-03-15",
+  });
+});
+
+test("keeps specially marked charges separate from available spending", () => {
+  assert.deepEqual(summarizeChargeUsage([
+    { amount: 800, transaction: { speciallyMarked: false } },
+    { amount: 2500, transaction: { speciallyMarked: true } },
+  ], 100), {
+    regularAmount: 800,
+    speciallyMarkedAmount: 2500,
+    spent: 700,
+  });
 });
 
 test("parses iOS Shortcut hash options", async () => {

@@ -2,6 +2,15 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { parseShortcutHash } from "./shortcut-entry";
+import {
+  addMonthsToDate,
+  billingCycleForCard,
+  expandInstallments,
+  installmentPaymentAmount,
+  isInBillingCycle,
+  normalizedInstallmentCount,
+  summarizeChargeUsage,
+} from "./finance";
 
 type Card = {
   id: string;
@@ -25,6 +34,7 @@ type Transaction = {
   note: string;
   paymentMethod: PaymentMethod;
   installmentCount: number;
+  speciallyMarked?: boolean;
   createdAt: string;
 };
 
@@ -186,9 +196,6 @@ const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const normalizedPaymentMethod = (value?: string): PaymentMethod => paymentMethods.includes(value as PaymentMethod)
   ? value as PaymentMethod
   : paymentMethods[0];
-const normalizedInstallmentCount = (value?: number) => Number.isInteger(value) && (value ?? 0) > 1 && (value ?? 0) <= 60
-  ? value!
-  : 1;
 const installmentLabel = (transaction: Transaction, installmentNumber?: number) => {
   const count = normalizedInstallmentCount(transaction.installmentCount);
   return count > 1
@@ -199,60 +206,17 @@ const normalizeTransaction = (transaction: Transaction): Transaction => ({
   ...transaction,
   paymentMethod: normalizedPaymentMethod(transaction.paymentMethod),
   installmentCount: normalizedInstallmentCount(transaction.installmentCount),
-});
-const addMonthsToDate = (dateText: string, offset: number) => {
-  const [year, monthNumber, day] = dateText.split("-").map(Number);
-  const target = new Date(Date.UTC(year, monthNumber - 1 + offset, 1));
-  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
-  return `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
-};
-const installmentPaymentAmount = (total: number, count: number, index: number) => {
-  const base = Math.floor(total / count);
-  return base + (index < total % count ? 1 : 0);
-};
-const expandInstallments = (transactions: Transaction[]): InstallmentCharge[] => transactions.flatMap((transaction) => {
-  const count = normalizedInstallmentCount(transaction.installmentCount);
-  return Array.from({ length: count }, (_, index) => ({
-    key: `${transaction.id}:${index + 1}`,
-    transaction,
-    date: addMonthsToDate(transaction.date, index),
-    amount: installmentPaymentAmount(transaction.amount, count, index),
-    installmentNumber: index + 1,
-    installmentCount: count,
-  }));
+  speciallyMarked: Boolean(transaction.speciallyMarked),
 });
 const dateForDay = (month: string, day: number) => {
   const [year, monthNumber] = month.split("-").map(Number);
   const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   return `${month}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
 };
-const previousMonth = (month: string) => {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const date = new Date(Date.UTC(year, monthNumber - 2, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-};
 const nextMonth = (month: string) => {
   const [year, monthNumber] = month.split("-").map(Number);
   const date = new Date(Date.UTC(year, monthNumber, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-};
-const addDaysToDate = (dateText: string, offset: number) => {
-  const [year, monthNumber, day] = dateText.split("-").map(Number);
-  const date = new Date(Date.UTC(year, monthNumber - 1, day + offset));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-};
-const billingCycleForCard = (month: string, card: Card) => {
-  const statementDate = dateForDay(month, card.closingDay);
-  const previousStatementDate = dateForDay(previousMonth(month), card.closingDay);
-  return {
-    statementDate,
-    startDate: addDaysToDate(previousStatementDate, 1),
-    endDate: addDaysToDate(statementDate, -1),
-  };
-};
-const isInBillingCycle = (date: string, month: string, card: Card) => {
-  const { startDate, endDate } = billingCycleForCard(month, card);
-  return date >= startDate && date <= endDate;
 };
 
 function parseNotification(text: string, cards: Card[]) {
@@ -370,6 +334,7 @@ export default function Home() {
           note: "",
           paymentMethod: paymentMethod ?? paymentMethods[0],
           installmentCount: normalizedInstallmentCount(shortcut.installmentCount),
+          speciallyMarked: false,
           createdAt: new Date().toISOString(),
         };
         putItem("transactions", transaction).then(() => {
@@ -409,18 +374,21 @@ export default function Home() {
     const card = cards.find((candidate) => candidate.id === item.cardId);
     return card ? isInBillingCycle(item.date, month, card) : false;
   }), [cards, month, rewards]);
-  const grossMonthSpent = monthCharges.reduce((sum, item) => sum + item.amount, 0);
-  const totalSpent = Math.max(grossMonthSpent - monthRewards.reduce((sum, item) => sum + item.amount, 0), 0);
+  const regularMonthCharges = monthCharges.filter((item) => !item.transaction.speciallyMarked);
+  const monthUsage = summarizeChargeUsage(monthCharges, monthRewards.reduce((sum, item) => sum + item.amount, 0));
+  const grossMonthSpent = monthUsage.regularAmount;
+  const speciallyMarkedMonthSpent = monthUsage.speciallyMarkedAmount;
+  const totalSpent = monthUsage.spent;
   const totalLimit = cards.reduce((sum, card) => sum + card.limit, 0);
   const remaining = Math.max(totalLimit - totalSpent, 0);
   const usage = totalLimit ? Math.min((totalSpent / totalLimit) * 100, 100) : 0;
   const cardSummaries = cards.map((card) => {
-    const gross = monthCharges.filter((item) => item.transaction.cardId === card.id).reduce((sum, item) => sum + item.amount, 0);
+    const cardCharges = monthCharges.filter((item) => item.transaction.cardId === card.id);
     const reward = monthRewards.filter((item) => item.cardId === card.id).reduce((sum, item) => sum + item.amount, 0);
-    const spent = Math.max(gross - reward, 0);
+    const { spent, speciallyMarkedAmount: speciallyMarked } = summarizeChargeUsage(cardCharges, reward);
     const remaining = card.limit - spent;
     const percent = card.limit ? (spent / card.limit) * 100 : 0;
-    return { card, spent, remaining, percent, ...billingCycleForCard(month, card) };
+    return { card, spent, speciallyMarked, remaining, percent, ...billingCycleForCard(month, card) };
   });
   const activeAlerts = cardSummaries.filter(({ remaining, percent }) =>
     percent >= settings.usagePercent || remaining <= settings.remainingAmount,
@@ -436,7 +404,8 @@ export default function Home() {
     ...visibleTransactions.map((charge) => ({ kind: "charge" as const, key: charge.key, date: charge.date, charge })),
     ...visibleRewards.map((reward) => ({ kind: "reward" as const, key: reward.id, date: reward.date, reward })),
   ].sort((a, b) => b.date.localeCompare(a.date)), [visibleRewards, visibleTransactions]);
-  const visibleTotal = Math.max(visibleTransactions.reduce((sum, item) => sum + item.amount, 0) - visibleRewards.reduce((sum, item) => sum + item.amount, 0), 0);
+  const visibleSpeciallyMarkedTotal = visibleTransactions.filter((item) => item.transaction.speciallyMarked).reduce((sum, item) => sum + item.amount, 0);
+  const visibleTotal = Math.max(visibleTransactions.filter((item) => !item.transaction.speciallyMarked).reduce((sum, item) => sum + item.amount, 0) - visibleRewards.reduce((sum, item) => sum + item.amount, 0), 0);
   const hasOverLimit = cardSummaries.some(({ remaining: cardRemaining }) => cardRemaining < 0);
   const byCategory = categories.map((name) => ({
     name,
@@ -449,11 +418,12 @@ export default function Home() {
     const items = allCharges.filter((item) => item.transaction.cardId === card.id && item.date >= startDate && item.date <= endDate);
     const rewardItems = rewards.filter((item) => item.cardId === card.id && item.date >= startDate && item.date <= endDate);
     const gross = items.reduce((sum, item) => sum + item.amount, 0);
+    const speciallyMarked = items.filter((item) => item.transaction.speciallyMarked).reduce((sum, item) => sum + item.amount, 0);
     const rewardTotal = rewardItems.reduce((sum, item) => sum + item.amount, 0);
     const record = statements.find((item) => item.id === `${card.id}:${statementDate}`);
     const calculatedTotal = Math.max(gross - rewardTotal, 0);
     const total = record?.amountOverride ?? calculatedTotal;
-    return { card, statementDate, startDate, endDate, dueDate, items, rewardItems, gross, rewardTotal, calculatedTotal, total, record };
+    return { card, statementDate, startDate, endDate, dueDate, items, rewardItems, gross, speciallyMarked, rewardTotal, calculatedTotal, total, record };
   });
 
   const flash = (message: string) => setToast(message);
@@ -502,6 +472,7 @@ export default function Home() {
       date: String(form.get("date")), note: String(form.get("note") ?? "").trim(),
       paymentMethod: normalizedPaymentMethod(String(form.get("paymentMethod") ?? "")),
       installmentCount: normalizedInstallmentCount(Number(form.get("installmentCount"))),
+      speciallyMarked: form.get("speciallyMarked") === "on",
       createdAt: editingTransaction?.createdAt ?? new Date().toISOString(),
     };
     await putItem("transactions", transaction);
@@ -578,7 +549,7 @@ export default function Home() {
     if (!settings.browserEnabled || typeof Notification === "undefined" || Notification.permission !== "granted") return;
     const card = cards.find((item) => item.id === cardId);
     if (!card) return;
-    const sourceCharges = expandInstallments(sourceTransactions).filter((item) => item.transaction.cardId === cardId && isInBillingCycle(item.date, month, card));
+    const sourceCharges = expandInstallments(sourceTransactions).filter((item) => item.transaction.cardId === cardId && !item.transaction.speciallyMarked && isInBillingCycle(item.date, month, card));
     const rewardTotal = rewards.filter((item) => item.cardId === cardId && isInBillingCycle(item.date, month, card)).reduce((sum, item) => sum + item.amount, 0);
     const spent = Math.max(sourceCharges.reduce((sum, item) => sum + item.amount, 0) - rewardTotal, 0);
     const left = card.limit - spent;
@@ -626,13 +597,14 @@ export default function Home() {
   }
 
   function exportJson() {
-    const cardLimitSummary = cardSummaries.map(({ card, spent, remaining: cardRemaining, percent }) => ({
+    const cardLimitSummary = cardSummaries.map(({ card, spent, speciallyMarked, remaining: cardRemaining, percent }) => ({
       cardId: card.id,
       bank: card.bank,
       name: card.name,
       last4: card.last4,
       limit: card.limit,
       spent,
+      speciallyMarked,
       remaining: cardRemaining,
       usagePercent: Number(percent.toFixed(2)),
     }));
@@ -652,10 +624,10 @@ export default function Home() {
   }
 
   function exportCsv() {
-    const transactionRows: (string | number)[][] = [["消費日期", "商家", "分類", "總金額", "信用卡", "付款管道", "分期期數", "每期約", "卡片額度", "備註"], ...transactions.map((item) => {
+    const transactionRows: (string | number)[][] = [["消費日期", "商家", "分類", "總金額", "特別標記", "信用卡", "付款管道", "分期期數", "每期約", "卡片額度", "備註"], ...transactions.map((item) => {
       const card = cards.find((candidate) => candidate.id === item.cardId);
       const count = normalizedInstallmentCount(item.installmentCount);
-      return [item.date, item.merchant, item.category, item.amount, card ? `${card.bank} ${card.name} ${card.last4}` : "", normalizedPaymentMethod(item.paymentMethod), count, installmentPaymentAmount(item.amount, count, 0), card?.limit ?? "", item.note];
+      return [item.date, item.merchant, item.category, item.amount, item.speciallyMarked ? "是" : "否", card ? `${card.bank} ${card.name} ${card.last4}` : "", normalizedPaymentMethod(item.paymentMethod), count, installmentPaymentAmount(item.amount, count, 0), card?.limit ?? "", item.note];
     })];
     const rewardRows: (string | number)[][] = [
       [],
@@ -669,9 +641,9 @@ export default function Home() {
     const cardRows: (string | number)[][] = [
       [],
       ["信用卡資料"],
-      ["銀行", "卡片名稱", "末四碼", "信用額度", `${month} 結帳週期已使用`, `${month} 結帳週期剩餘額度`, "結帳日", "繳款截止日"],
-      ...cardSummaries.map(({ card, spent, remaining: cardRemaining }) => [
-        card.bank, card.name, card.last4, card.limit, spent, cardRemaining, card.closingDay, card.dueDay,
+      ["銀行", "卡片名稱", "末四碼", "信用額度", `${month} 結帳週期已使用`, `${month} 特別標記`, `${month} 結帳週期剩餘額度`, "結帳日", "繳款截止日"],
+      ...cardSummaries.map(({ card, spent, speciallyMarked, remaining: cardRemaining }) => [
+        card.bank, card.name, card.last4, card.limit, spent, speciallyMarked, cardRemaining, card.closingDay, card.dueDay,
       ]),
     ];
     const rows = [...transactionRows, ...rewardRows, ...cardRows];
@@ -756,7 +728,7 @@ export default function Home() {
           </div>
           <div className="big-number">{money(totalSpent)}</div>
           <div className="summary-meta">
-            <span>共 {monthCharges.length} 筆本期消費 · 各卡依結帳日計算</span>
+            <span>一般消費 {regularMonthCharges.length} 筆 · 特別標記 {money(speciallyMarkedMonthSpent)} 不計入額度</span>
             <span className="local-pill"><i /> 僅儲存在這台裝置</span>
           </div>
           <div className="limit-track"><span style={{ width: `${usage}%` }} /></div>
@@ -797,12 +769,12 @@ export default function Home() {
           <div className="panel-heading"><div><span className="eyebrow">我的卡片</span><h2>額度一目了然</h2></div><button className="circle-add" onClick={() => setModal("card")} aria-label="新增信用卡">＋</button></div>
           {cards.length === 0 ? (
             <button className="empty-card" onClick={() => setModal("card")}><span>＋</span><strong>加入第一張信用卡</strong><small>只需暱稱、額度與結帳日</small></button>
-          ) : <div className="card-stack">{cardSummaries.map(({ card, spent, remaining: cardRemaining, percent: rawPercent, startDate, endDate }) => {
+          ) : <div className="card-stack">{cardSummaries.map(({ card, spent, speciallyMarked, remaining: cardRemaining, percent: rawPercent, startDate, endDate }) => {
             const percent = Math.min(rawPercent, 100);
             return <article className="credit-row" key={card.id}>
               <div className="card-swatch" style={{ background: card.color }}><span>{card.bank.slice(0, 1)}</span></div>
               <div className="credit-info"><strong>{card.name}</strong><span>{card.bank} · •••• {card.last4 || "未填"}</span><span>{startDate} 至 {endDate}</span><div className="mini-track"><i style={{ width: `${percent}%`, background: card.color }} /></div></div>
-              <div className="credit-numbers"><strong>已用 {money(spent)}</strong><span className={cardRemaining < 0 ? "over-limit" : ""}>{cardRemaining < 0 ? `超過 ${money(Math.abs(cardRemaining))}` : `剩餘 ${money(cardRemaining)}`}</span></div>
+              <div className="credit-numbers"><strong>已用 {money(spent)}</strong><span className="specially-marked-total">特別標記 {money(speciallyMarked)}</span><span className={cardRemaining < 0 ? "over-limit" : ""}>{cardRemaining < 0 ? `超過 ${money(Math.abs(cardRemaining))}` : `剩餘 ${money(cardRemaining)}`}</span></div>
               <button className="row-edit-button" onClick={() => editCard(card)} aria-label={`編輯 ${card.name}`}>編輯</button>
             </article>;
           })}</div>}
@@ -839,7 +811,7 @@ export default function Home() {
                   {paymentMethods.map((method) => <option key={method}>{method}</option>)}
                 </select>
               </label>
-              <span className="record-count">{visibleLedgerEntries.length} 筆 · {money(visibleTotal)}</span>
+              <span className="record-count">一般 {money(visibleTotal)}{visibleSpeciallyMarkedTotal > 0 ? ` · 特別標記 ${money(visibleSpeciallyMarkedTotal)}` : ""}</span>
             </div>
           </div>
           {visibleLedgerEntries.length === 0 ? <div className="empty-transactions"><span>收</span><strong>{monthCharges.length || monthRewards.length ? "目前篩選條件沒有明細" : "這個結帳週期還沒有消費紀錄"}</strong><p>{monthCharges.length || monthRewards.length ? "可以切換其他信用卡或付款管道。" : "從手動新增、回饋折抵或貼上銀行通知開始。"}</p></div> : (
@@ -858,9 +830,9 @@ export default function Home() {
               const item = entry.charge;
               const transaction = item.transaction;
               const card = cards.find((candidate) => candidate.id === transaction.cardId);
-              return <article className="transaction-row" key={item.key} role="button" tabIndex={0} onClick={() => viewExpense(transaction, item.installmentNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(transaction, item.installmentNumber); } }} aria-label={`查看 ${transaction.merchant || "未命名消費"} 詳情`}>
-                <div className="category-icon">{transaction.category.slice(0, 1)}</div>
-                <div className="transaction-main"><strong>{transaction.merchant || "未命名消費"}</strong><span>{item.date} · {transaction.category}{card ? ` · ${card.name}` : ""} · {normalizedPaymentMethod(transaction.paymentMethod)}{item.installmentCount > 1 ? ` · 第 ${item.installmentNumber}／${item.installmentCount} 期` : ""}</span></div>
+              return <article className={`transaction-row${transaction.speciallyMarked ? " specially-marked-row" : ""}`} key={item.key} role="button" tabIndex={0} onClick={() => viewExpense(transaction, item.installmentNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); viewExpense(transaction, item.installmentNumber); } }} aria-label={`查看 ${transaction.merchant || "未命名消費"} 詳情`}>
+                <div className="category-icon">{transaction.speciallyMarked ? "特" : transaction.category.slice(0, 1)}</div>
+                <div className="transaction-main"><strong>{transaction.merchant || "未命名消費"}{transaction.speciallyMarked && <em className="special-badge">特別標記</em>}</strong><span>{item.date} · {transaction.category}{card ? ` · ${card.name}` : ""} · {normalizedPaymentMethod(transaction.paymentMethod)}{item.installmentCount > 1 ? ` · 第 ${item.installmentNumber}／${item.installmentCount} 期` : ""}</span></div>
                 <strong className="transaction-amount">− {money(item.amount)}</strong>
                 <span className="transaction-view" aria-hidden="true">查看 →</span>
                 <button className="delete-button" onClick={(event) => { event.stopPropagation(); removeTransaction(transaction.id); }} aria-label={`刪除 ${transaction.merchant} 全部分期消費`}>×</button>
@@ -869,15 +841,15 @@ export default function Home() {
           )}
         </> : <div className="statements-view">
           <div className="statement-heading"><div><span className="eyebrow">結帳週期</span><h2>{month.replace("-", " 年 ")} 月帳單</h2></div><p>結帳日前顯示預估帳單；到卡片設定的結帳日後會自動轉為正式待繳帳單。</p></div>
-          {cards.length === 0 ? <div className="empty-transactions"><span>帳</span><strong>先加入信用卡</strong><p>設定結帳日與繳款截止日後，就能在這裡管理帳單。</p></div> : <div className="statement-list">{statementSummaries.map(({ card, statementDate, startDate, endDate, dueDate, items, rewardItems, gross, rewardTotal, calculatedTotal, total, record }) => {
+          {cards.length === 0 ? <div className="empty-transactions"><span>帳</span><strong>先加入信用卡</strong><p>設定結帳日與繳款截止日後，就能在這裡管理帳單。</p></div> : <div className="statement-list">{statementSummaries.map(({ card, statementDate, startDate, endDate, dueDate, items, rewardItems, gross, speciallyMarked, rewardTotal, calculatedTotal, total, record }) => {
             const issued = statementDate <= dayStamp;
             const paid = Boolean(record?.paidAt);
             return <article className={`statement-card${paid ? " paid" : ""}`} key={`${card.id}:${statementDate}`}>
               <div className="statement-card-top"><span className="card-swatch" style={{ background: card.color }}>{card.bank.slice(0, 1)}</span><div><strong>{card.name}</strong><small>{startDate} 至 {endDate} · {items.length} 筆</small></div><span className={`statement-status ${paid ? "paid" : issued ? "due" : "pending"}`}>{paid ? "已繳" : issued ? "待繳" : "未出帳"}</span></div>
               <div className="statement-amount"><span>{issued ? "正式應繳金額" : "預估帳單金額"}</span><strong>{money(total)}</strong></div>
-              <div className="statement-meta"><span>本期消費 {money(gross)}</span><span>回饋折抵 −{money(rewardTotal)}</span><span>繳款期限 {dueDate}</span></div>
+              <div className="statement-meta"><span>本期帳單消費 {money(gross)}</span><span>其中為特別標記 {money(speciallyMarked)}</span><span>回饋折抵 −{money(rewardTotal)}</span><span>繳款期限 {dueDate}</span></div>
               <form className="statement-amount-editor" key={`${record?.amountOverride ?? calculatedTotal}`} onSubmit={(event) => saveStatementAmount(event, card.id, statementDate)}><label>自行修改金額<input name="statementAmount" type="number" min="0" step="1" defaultValue={total} required /></label><button type="submit">儲存金額</button>{record?.amountOverride !== undefined && record.amountOverride !== calculatedTotal && <small>系統計算為 {money(calculatedTotal)}，目前使用手動金額。</small>}</form>
-              {(items.length > 0 || rewardItems.length > 0) && <div className="statement-items">{items.map((item) => <div key={item.key}><span>{item.transaction.merchant}{item.installmentCount > 1 ? <small>第 {item.installmentNumber}／{item.installmentCount} 期</small> : null}</span><strong>{money(item.amount)}</strong></div>)}{rewardItems.map((reward) => <div className="reward-item" key={reward.id}><span>回饋折抵{reward.note ? <small>{reward.note}</small> : null}</span><strong>− {money(reward.amount)}</strong><span className="reward-actions"><button onClick={() => editReward(reward)} aria-label={`編輯 ${money(reward.amount)} 回饋折抵`}>編</button><button onClick={() => removeReward(reward.id)} aria-label={`刪除 ${money(reward.amount)} 回饋折抵`}>×</button></span></div>)}</div>}
+              {(items.length > 0 || rewardItems.length > 0) && <div className="statement-items">{items.map((item) => <div className={item.transaction.speciallyMarked ? "special-statement-item" : ""} key={item.key}><span>{item.transaction.merchant}{item.transaction.speciallyMarked ? <small>特別標記 · 不計入額度統計</small> : null}{item.installmentCount > 1 ? <small>第 {item.installmentNumber}／{item.installmentCount} 期</small> : null}</span><strong>{money(item.amount)}</strong></div>)}{rewardItems.map((reward) => <div className="reward-item" key={reward.id}><span>回饋折抵{reward.note ? <small>{reward.note}</small> : null}</span><strong>− {money(reward.amount)}</strong><span className="reward-actions"><button onClick={() => editReward(reward)} aria-label={`編輯 ${money(reward.amount)} 回饋折抵`}>編</button><button onClick={() => removeReward(reward.id)} aria-label={`刪除 ${money(reward.amount)} 回饋折抵`}>×</button></span></div>)}</div>}
               <label className="statement-paid"><input type="checkbox" checked={paid} disabled={!issued} onChange={(event) => toggleStatementPaid(card.id, statementDate, event.target.checked)} /><span>{issued ? "記錄為已繳清" : `${statementDate} 結帳後可記錄繳款`}</span></label>
             </article>;
           })}</div>}
@@ -909,7 +881,7 @@ function ExpenseForm({ cards, seed, editing, onSubmit }: { cards: Card[]; seed: 
   const [amount, setAmount] = useState(Number(seed.amount) || 0);
   const [installmentCount, setInstallmentCount] = useState(selectedInstallmentCount);
   const firstPayment = amount ? installmentPaymentAmount(amount, installmentCount, 0) : 0;
-  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" value={amount || ""} onChange={(event) => setAmount(Number(event.target.value))} placeholder="消費總金額" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>付款管道<select name="paymentMethod" defaultValue={normalizedPaymentMethod(seed.paymentMethod)} required>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label>分期付款<select name="installmentCount" value={installmentCount} onChange={(event) => setInstallmentCount(Number(event.target.value))} required>{!installmentOptions.includes(selectedInstallmentCount) && <option value={selectedInstallmentCount}>{selectedInstallmentCount} 期</option>}{installmentOptions.map((count) => <option key={count} value={count}>{count === 1 ? "一次付清" : `${count} 期`}</option>)}</select></label>{installmentCount > 1 && <div className="installment-preview wide"><span>系統將自動帶入後續 {installmentCount} 個月</span><strong>每期約 {money(firstPayment)}</strong><small>若總額無法整除，前幾期會多 1 元，合計仍等於總金額。</small></div>}<label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="共同支出、報帳等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
+  return <form onSubmit={onSubmit}><span className="eyebrow">{editing ? "編輯消費" : "新增消費"}</span><h2>{editing ? "修改這筆花費" : "記下一筆花費"}</h2><div className="amount-field"><span>NT$</span><input name="amount" type="number" min="1" step="1" value={amount || ""} onChange={(event) => setAmount(Number(event.target.value))} placeholder="消費總金額" required autoFocus /></div><div className="form-grid"><label>商家名稱<input name="merchant" defaultValue={seed.merchant || ""} placeholder="例如：全聯" required /></label><label>消費日期<input name="date" type="date" defaultValue={seed.date || today()} required /></label><label>信用卡<select name="cardId" defaultValue={seed.cardId ?? cards[0]?.id} required>{seed.cardId === "" && <option value="" disabled>請選擇信用卡</option>}{cards.map((card) => <option key={card.id} value={card.id}>{card.name} · {card.last4 || card.bank}</option>)}</select></label><label>分類<select name="category" defaultValue={seed.category ?? "餐飲"} required>{seed.category === "" && <option value="" disabled>請選擇分類</option>}{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>付款管道<select name="paymentMethod" defaultValue={normalizedPaymentMethod(seed.paymentMethod)} required>{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label>分期付款<select name="installmentCount" value={installmentCount} onChange={(event) => setInstallmentCount(Number(event.target.value))} required>{!installmentOptions.includes(selectedInstallmentCount) && <option value={selectedInstallmentCount}>{selectedInstallmentCount} 期</option>}{installmentOptions.map((count) => <option key={count} value={count}>{count === 1 ? "一次付清" : `${count} 期`}</option>)}</select></label>{installmentCount > 1 && <div className="installment-preview wide"><span>首期從消費日開始，之後每月同日入帳，共 {installmentCount} 期</span><strong>首期 {money(firstPayment)}</strong><small>遇到月底會調整為當月最後一天；若總額無法整除，前幾期多 1 元，合計仍等於總金額。</small></div>}<label className="toggle-row special-expense-toggle wide"><input name="speciallyMarked" type="checkbox" defaultChecked={Boolean(seed.speciallyMarked)} /><span><strong>設為特別標記</strong><small>仍保留在消費與帳單明細，但獨立顯示且不計入額度使用與剩餘額度。</small></span></label><label className="wide">備註（選填）<input name="note" defaultValue={seed.note || ""} placeholder="共同支出、報帳等" /></label></div><button className="submit-button" type="submit">{editing ? "儲存修改" : "確認並儲存"}</button></form>;
 }
 
 function RewardForm({ cards, reward, onSubmit }: { cards: Card[]; reward: RewardCredit | null; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
@@ -933,6 +905,7 @@ function ExpenseDetail({ transaction, installmentNumber, card, onEdit }: { trans
       <div><dt>分類</dt><dd>{transaction.category}</dd></div>
       <div><dt>付款管道</dt><dd>{normalizedPaymentMethod(transaction.paymentMethod)}</dd></div>
       <div><dt>付款方式</dt><dd>{installmentLabel(transaction, installmentNumber)}</dd></div>
+      <div><dt>特別標記</dt><dd>{transaction.speciallyMarked ? "是（不計入額度統計）" : "否"}</dd></div>
       {count > 1 && <div><dt>分期總金額</dt><dd>{money(transaction.amount)}</dd></div>}
       <div><dt>備註</dt><dd>{transaction.note || "沒有備註"}</dd></div>
     </dl>
